@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/skyler/backtrack/protocol"
+	"github.com/nanatheblue/backtrack/protocol"
 )
 
 const (
