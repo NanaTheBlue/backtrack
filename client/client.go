@@ -19,8 +19,10 @@ type Frame struct {
 }
 
 func RunClient() {
-	address := "localhost:9000"
+	Run("localhost:9000", "bingus", 123)
+}
 
+func Run(address string, username string, avatarID uint16) {
 	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
 	if err != nil {
 		fmt.Printf("Failed to connect to server: %v\n", err)
@@ -38,7 +40,7 @@ func RunClient() {
 	}
 
 	// 1. Encode the Identify payload
-	payload, err := EncodeIdentify("bingus", 123)
+	payload, err := EncodeIdentify(username, avatarID)
 	if err != nil {
 		fmt.Printf("Failed to encode identify message: %v\n", err)
 		return

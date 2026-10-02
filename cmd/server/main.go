@@ -3,9 +3,7 @@ package main
 import (
 	"flag"
 	"log"
-	"time"
 
-	"github.com/skyler/backtrack/client"
 	"github.com/skyler/backtrack/server"
 )
 
@@ -19,10 +17,6 @@ func main() {
 	}
 	defer srv.Close()
 
-	go srv.Run() // blocks forever
-
-	time.Sleep(50 * time.Millisecond)
-
-	log.Println("Starting client...")
-	client.RunClient()
+	srv.Run() // blocks forever
 }
+

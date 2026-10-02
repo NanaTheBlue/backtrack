@@ -63,7 +63,10 @@ Avatars are referenced by a `uint16` ID. The server stores and broadcasts the ID
 
 ```
 backtrack/
-├── cmd/server/main.go      # Entrypoint — parses flags, starts the server
+├── cmd/
+│   ├── client/main.go      # Client entrypoint — parses flags, connects to server
+│   └── server/main.go      # Server entrypoint — parses flags, starts the server
+├── client/client.go        # Client implementation — framing, identify, connection
 ├── protocol/protocol.go    # Binary wire format — framing, builders, parsers
 ├── server/server.go        # Chat server — connections, users, broadcast
 └── go.mod
@@ -71,15 +74,30 @@ backtrack/
 
 ## Building & Running
 
+### Server
+
 ```bash
-# build
-go build -o backtrack ./cmd/server
+# build server
+go build -o backtrack-server ./cmd/server
 
-# run (default :9000)
-./backtrack
+# run server (default :9000)
+./backtrack-server
 
-# run on a different port
-./backtrack -addr :8080
+# run directly with go
+go run ./cmd/server -addr :9000
+```
+
+### Client
+
+```bash
+# build client
+go build -o backtrack-client ./cmd/client
+
+# run client (default localhost:9000)
+./backtrack-client
+
+# run directly with go
+go run ./cmd/client -addr localhost:9000 -user bingus -avatar 123
 ```
 
 ## Roadmap
