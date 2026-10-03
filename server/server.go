@@ -83,21 +83,33 @@ func (u *User) close() {
 // It batches multiple queued messages into a single flush for efficiency.
 func (u *User) writeLoop() {
 	writer := bufio.NewWriter(u.conn)
+	defer u.close() // ensure we close on any write error
 	for {
 		select {
 		case msg := <-u.outbox:
-			protocol.WriteMessage(writer, msg.msgType, msg.payload)
+			err := protocol.WriteMessage(writer, msg.msgType, msg.payload)
+			if err != nil {
+				log.Printf("write error for user %d (%s): %v", u.ID, u.Username, err)
+				return
+			}
+
 			// Drain any other queued messages before flushing.
 		drain:
 			for {
 				select {
 				case msg = <-u.outbox:
-					protocol.WriteMessage(writer, msg.msgType, msg.payload)
+					err := protocol.WriteMessage(writer, msg.msgType, msg.payload)
+					if err != nil {
+						log.Printf("write error for user %d (%s): %v", u.ID, u.Username, err)
+
+						return
+					}
 				default:
 					break drain
 				}
 			}
 			if err := writer.Flush(); err != nil {
+
 				return
 			}
 		case <-u.quit:
