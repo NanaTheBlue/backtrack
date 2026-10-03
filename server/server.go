@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -35,9 +36,10 @@ type User struct {
 	Username string
 	AvatarID uint16
 
-	conn   net.Conn
-	outbox chan outMsg // buffered channel for non-blocking sends
-	quit   chan struct{}
+	conn      net.Conn
+	outbox    chan outMsg // buffered channel for non-blocking sends
+	quit      chan struct{}
+	closeOnce sync.Once
 
 	mu     sync.Mutex // protects status
 	status byte
@@ -69,14 +71,12 @@ func (u *User) send(msgType byte, payload []byte) {
 	}
 }
 
-// close signals the user's write loop to stop.
+// close stops the write loop and closes the connection. Safe to call multiple times.
 func (u *User) close() {
-	select {
-	case <-u.quit:
-		// already closed
-	default:
+	u.closeOnce.Do(func() {
 		close(u.quit)
-	}
+		u.conn.Close()
+	})
 }
 
 // writeLoop drains the outbox and writes to the connection.
@@ -130,13 +130,17 @@ func New(addr string) (*Server, error) {
 	return s, nil
 }
 
-// Run starts accepting connections. Blocks forever.
-func (s *Server) Run() {
+// Run starts accepting connections.
+func (s *Server) Run() error {
 	log.Printf("backtrack server listening on %s", s.listener.Addr())
 	for {
 		conn, err := s.listener.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			return nil
+		}
 		if err != nil {
 			log.Printf("accept error: %v", err)
+			time.Sleep(100 * time.Millisecond) // avoid busy loop
 			continue
 		}
 		go s.handleConn(conn)
@@ -150,7 +154,8 @@ func (s *Server) Addr() net.Addr {
 
 // Close shuts down the listener.
 func (s *Server) Close() error {
-	return s.listener.Close()
+	err := s.listener.Close()
+	return err
 }
 
 // broadcast sends a message to every connected user, optionally excluding one.
@@ -260,7 +265,6 @@ func (s *Server) handleConn(conn net.Conn) {
 	s.mu.Unlock()
 
 	s.broadcast(protocol.MsgUserLeft, protocol.UserLeftPayload(userID), 0)
-	conn.Close()
 }
 
 // pingLoop sends MsgPing to the user at regular intervals.

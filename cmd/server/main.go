@@ -17,6 +17,8 @@ func main() {
 	}
 	defer srv.Close()
 
-	srv.Run() // blocks forever
+	err = srv.Run()
+	if err != nil {
+		log.Fatalf("server error: %v", err)
+	}
 }
-
