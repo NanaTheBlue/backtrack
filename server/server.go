@@ -32,31 +32,14 @@ type outMsg struct {
 
 // User represents a connected client.
 type User struct {
-	ID       uint32
-	Username string
-	AvatarID uint16
-
+	ID        uint32
+	Username  string
+	AvatarID  uint16
+	Status    byte
 	conn      net.Conn
 	outbox    chan outMsg // buffered channel for non-blocking sends
 	quit      chan struct{}
 	closeOnce sync.Once
-
-	mu     sync.Mutex // protects status
-	status byte
-}
-
-// SetStatus updates the user's presence status (thread-safe).
-func (u *User) SetStatus(s byte) {
-	u.mu.Lock()
-	u.status = s
-	u.mu.Unlock()
-}
-
-// GetStatus returns the user's presence status (thread-safe).
-func (u *User) GetStatus() byte {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return u.status
 }
 
 // send queues a message to the user's outbox. If the outbox is full
@@ -121,7 +104,7 @@ func (u *User) writeLoop() {
 // Server holds the state for the TCP chat server.
 type Server struct {
 	listener net.Listener
-	users    map[uint32]*User
+	hub      *Hub
 	mu       sync.RWMutex
 	nextID   atomic.Uint32
 }
@@ -135,9 +118,10 @@ func New(addr string) (*Server, error) {
 
 	s := &Server{
 		listener: ln,
-		users:    make(map[uint32]*User),
+		hub:      NewHub(),
 	}
 	s.nextID.Store(1)
+	go s.hub.Run()
 
 	return s, nil
 }
@@ -167,20 +151,8 @@ func (s *Server) Addr() net.Addr {
 // Close shuts down the listener.
 func (s *Server) Close() error {
 	err := s.listener.Close()
+	s.hub.Stop()
 	return err
-}
-
-// broadcast sends a message to every connected user, optionally excluding one.
-// This never blocks — each user's send() is non-blocking.
-func (s *Server) broadcast(msgType byte, payload []byte, excludeID uint32) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for id, u := range s.users {
-		if id == excludeID {
-			continue
-		}
-		u.send(msgType, payload)
-	}
 }
 
 // handleConn runs the full lifecycle of a single client connection.
@@ -219,39 +191,16 @@ func (s *Server) handleConn(conn net.Conn) {
 		ID:       userID,
 		Username: username,
 		AvatarID: avatarID,
-		status:   protocol.StatusOnline,
+		Status:   protocol.StatusOnline,
 		conn:     conn,
 		outbox:   make(chan outMsg, outboxSize),
 		quit:     make(chan struct{}),
 	}
 
-	// Start the write loop (drains outbox → connection).
+	// Start the write loop
 	go user.writeLoop()
 
-	s.mu.Lock()
-	s.users[userID] = user
-	s.mu.Unlock()
-
-	log.Printf("[+] %s (id=%d, avatar=%d) connected", username, userID, avatarID)
-
-	// Send welcome with the assigned user ID.
-	user.send(protocol.MsgWelcome, protocol.WelcomePayload(userID))
-
-	// Send info about everyone already online.
-	s.mu.RLock()
-	for _, other := range s.users {
-		if other.ID == userID {
-			continue
-		}
-		user.send(protocol.MsgUserInfo,
-			protocol.UserInfoPayload(other.ID, other.AvatarID, other.GetStatus(), other.Username))
-	}
-	s.mu.RUnlock()
-
-	// Announce the new user to everyone else.
-	s.broadcast(protocol.MsgUserJoined,
-		protocol.UserJoinedPayload(userID, avatarID, username), userID)
-
+	s.hub.Register(user)
 	// Start pinging the client periodically.
 	go s.pingLoop(user)
 
@@ -272,11 +221,7 @@ func (s *Server) handleConn(conn net.Conn) {
 
 	user.close()
 
-	s.mu.Lock()
-	delete(s.users, userID)
-	s.mu.Unlock()
-
-	s.broadcast(protocol.MsgUserLeft, protocol.UserLeftPayload(userID), 0)
+	s.hub.Unregister(user)
 }
 
 // pingLoop sends MsgPing to the user at regular intervals.
@@ -306,18 +251,14 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 			return
 		}
 		log.Printf("%s: %s", user.Username, body)
-		s.broadcast(protocol.MsgChatRecv,
-			protocol.ChatRecvPayload(user.ID, body), 0)
+		s.hub.Chat(user, body)
 
 	case protocol.MsgSetPresence:
 		status, err := protocol.ParseSetPresence(msg.Payload)
 		if err != nil {
 			return
 		}
-		user.SetStatus(status)
-		log.Printf("[~] %s presence → %d", user.Username, status)
-		s.broadcast(protocol.MsgPresenceUpdate,
-			protocol.PresencePayload(user.ID, status), 0)
+		s.hub.SetPresence(user, status)
 
 	case protocol.MsgPong:
 		// Client is alive. The read deadline was already reset by the message loop.
