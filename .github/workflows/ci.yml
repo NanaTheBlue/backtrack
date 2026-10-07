@@ -1,0 +1,47 @@
+name: CI
+
+# Run this workflow on pushes to main, and on all pull requests
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # 1. Check out the repository code
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 2. Set up the Go environment
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.27.1'
+        check-latest: true
+
+    # 3. Download dependencies
+    - name: Install dependencies
+      run: go mod download
+
+    # 4. Check formatting and suspicious code
+    - name: Vet code
+      run: go vet ./...
+
+    # 5. Run tests with the race detector
+    - name: Run tests
+      run: go test -v -race ./...
+
+    # 6. Verify the binaries compile
+    - name: Build binaries
+      run: |
+        go build -o bin/server ./cmd/server
+        go build -o bin/client ./cmd/client
+
+    # 7. Test the Docker build (ensures the Dockerfile is valid)
+    - name: Build Docker Image
+      run: docker build -t backtrack-server:test .
+
