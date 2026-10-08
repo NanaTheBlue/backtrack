@@ -9,7 +9,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Docker requires repository names to be strictly lowercase
+  IMAGE_NAME: nanatheblue/backtrack
 
 jobs:
   test-and-build:
@@ -90,14 +91,14 @@ jobs:
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
           # Pull the latest image we just pushed
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main
+          sudo docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main
           
           # Stop and remove the old container
-          docker stop backtrack-server || true
-          docker rm backtrack-server || true
+          sudo docker stop backtrack-server || true
+          sudo docker rm backtrack-server || true
           
           # Run the new container (adjust ports/env vars if needed)
-          docker run -d \
+          sudo docker run -d \
             --name backtrack-server \
             -p 9000:9000 \
             --restart unless-stopped \
