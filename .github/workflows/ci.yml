@@ -44,7 +44,6 @@ jobs:
     - name: Build binaries
       run: |
         go build -o bin/server ./cmd/server
-        go build -o bin/client ./cmd/client
 
     # 7. Test the Docker build (runs only on pull requests)
     - name: Test Docker build
