@@ -1,8 +1,8 @@
 # Backtrack
 
-A chat server for retro/older consoles, using a lightweight binary TCP protocol designed to be easy to implement on constrained hardware.
+A chat server for retro/older consoles (and modern desktop clients), using a lightweight binary TCP protocol designed to be easy to implement on constrained hardware.
 
-The server is written in Go. Clients are intended to be written in C (or whatever each console's homebrew SDK requires) and connect over raw TCP.
+The server is written in Go. Clients can be written in anything (like C for homebrew consoles, or Go/Wails for desktop) as long as they can connect over raw TCP.
 
 ## Why binary instead of JSON?
 
@@ -10,10 +10,11 @@ Older consoles have limited memory and CPU. Parsing JSON in C requires a library
 
 ## Architecture
 
-- **One global chat room** — all connected users see all messages
-- **Per-user goroutine** for reading, a separate goroutine for writing
-- **Non-blocking broadcasts** — a slow client gets disconnected instead of freezing everyone
-- **Ping/pong keepalive** — dead connections are detected and cleaned up automatically
+- **One global chat room** — all connected users see all messages.
+- **Hub-based Event Loop** — all chat state and routing is managed by a central lock-free `Hub` (`server/hub.go`) that processes events sequentially via channels, preventing race conditions without needing mutexes.
+- **Per-user Goroutines** — each connection gets a goroutine for reading incoming TCP frames and a dedicated `writeLoop` for sending them.
+- **Non-blocking broadcasts** — a slow client gets disconnected instead of freezing the Hub or other users.
+- **Ping/pong keepalive** — dead connections are detected and cleaned up automatically.
 
 ## Protocol
 
@@ -64,11 +65,12 @@ Avatars are referenced by a `uint16` ID. The server stores and broadcasts the ID
 ```
 backtrack/
 ├── cmd/
-│   ├── client/main.go      # Client entrypoint — parses flags, connects to server
 │   └── server/main.go      # Server entrypoint — parses flags, starts the server
-├── client/client.go        # Client implementation — framing, identify, connection
-├── protocol/protocol.go    # Binary wire format — framing, builders, parsers
-├── server/server.go        # Chat server — connections, users, broadcast
+├── desktop/                # Wails Desktop Application (Modern UI Client)
+├── protocol/               # Binary wire format — framing, builders, parsers
+├── server/
+│   ├── server.go           # Chat server — TCP connections & lifecycle
+│   └── hub.go              # Lock-free event router for chat state
 └── go.mod
 ```
 
@@ -78,26 +80,25 @@ backtrack/
 
 ```bash
 # build server
-go build -o backtrack-server ./cmd/server
+go build -o bin/server ./cmd/server
 
 # run server (default :9000)
-./backtrack-server
+./bin/server
 
 # run directly with go
-go run ./cmd/server -addr :9000
+go run ./cmd/server/main.go -addr :9000
 ```
 
-### Client
+### Desktop Client (Wails)
 
 ```bash
-# build client
-go build -o backtrack-client ./cmd/client
+cd desktop
 
-# run client (default localhost:9000)
-./backtrack-client
+# run client in development mode (hot-reloading)
+wails dev
 
-# run directly with go
-go run ./cmd/client -addr localhost:9000 -user bingus -avatar 123
+# build client for production
+wails build
 ```
 
 ## Roadmap
