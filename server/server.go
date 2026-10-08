@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -49,7 +49,7 @@ func (u *User) send(msgType byte, payload []byte) {
 	case u.outbox <- outMsg{msgType, payload}:
 	default:
 		// Client can't keep up — disconnect them.
-		log.Printf("outbox full for user %d (%s), disconnecting", u.ID, u.Username)
+		slog.Warn("outbox full, disconnecting", "user_id", u.ID, "username", u.Username)
 		u.close()
 	}
 }
@@ -72,7 +72,7 @@ func (u *User) writeLoop() {
 		case msg := <-u.outbox:
 			err := protocol.WriteMessage(writer, msg.msgType, msg.payload)
 			if err != nil {
-				log.Printf("write error for user %d (%s): %v", u.ID, u.Username, err)
+				slog.Error("write error", "user_id", u.ID, "username", u.Username, "error", err)
 				return
 			}
 
@@ -83,8 +83,7 @@ func (u *User) writeLoop() {
 				case msg = <-u.outbox:
 					err := protocol.WriteMessage(writer, msg.msgType, msg.payload)
 					if err != nil {
-						log.Printf("write error for user %d (%s): %v", u.ID, u.Username, err)
-
+						slog.Error("write error", "user_id", u.ID, "username", u.Username, "error", err)
 						return
 					}
 				default:
@@ -128,14 +127,14 @@ func New(addr string) (*Server, error) {
 
 // Run starts accepting connections.
 func (s *Server) Run() error {
-	log.Printf("backtrack server listening on %s", s.listener.Addr())
+	slog.Info("backtrack server listening", "addr", s.listener.Addr().String())
 	for {
 		conn, err := s.listener.Accept()
 		if errors.Is(err, net.ErrClosed) {
 			return nil
 		}
 		if err != nil {
-			log.Printf("accept error: %v", err)
+			slog.Error("accept error", "error", err)
 			time.Sleep(100 * time.Millisecond) // avoid busy loop
 			continue
 		}
@@ -165,7 +164,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	// --- Wait for MsgIdentify ---
 	msg, err := protocol.ReadMessage(reader)
 	if err != nil {
-		log.Printf("read error from %s: %v", conn.RemoteAddr(), err)
+		slog.Error("read error", "remote_addr", conn.RemoteAddr().String(), "error", err)
 		conn.Close()
 		return
 	}
@@ -180,7 +179,7 @@ func (s *Server) handleConn(conn net.Conn) {
 
 	username, avatarID, err := protocol.ParseIdentify(msg.Payload)
 	if err != nil {
-		log.Printf("bad identify from %s: %v", conn.RemoteAddr(), err)
+		slog.Warn("bad identify", "remote_addr", conn.RemoteAddr().String(), "error", err)
 		conn.Close()
 		return
 	}
@@ -217,7 +216,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	}
 
 	// --- Disconnect ---
-	log.Printf("[-] %s (id=%d) disconnected", user.Username, user.ID)
+	slog.Info("user disconnected", "username", user.Username, "user_id", user.ID)
 
 	user.close()
 
@@ -247,10 +246,10 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 	case protocol.MsgChatSend:
 		body, err := protocol.ParseChatSend(msg.Payload)
 		if err != nil {
-			log.Printf("bad chat from %s: %v", user.Username, err)
+			slog.Warn("bad chat", "username", user.Username, "error", err)
 			return
 		}
-		log.Printf("%s: %s", user.Username, body)
+		slog.Info("chat message", "username", user.Username, "message", body)
 		s.hub.Chat(user, body)
 
 	case protocol.MsgSetPresence:
