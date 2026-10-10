@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,14 +17,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            platform: linux/amd64
-            build_flags: "-tags webkit2_41"
+            build_flags: "-tags webkit2_41 -platform linux/amd64"
           - os: windows-latest
-            platform: windows/amd64
-            build_flags: ""
+            build_flags: "-platform windows/amd64"
           - os: macos-latest
-            platform: darwin/universal
-            build_flags: ""
+            build_flags: "-platform darwin/universal"
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -60,11 +58,26 @@ jobs:
         working-directory: ./desktop
         run: wails build ${{ matrix.build_flags }}
 
+      - name: Package Release Assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          ROOT_DIR=$(pwd)
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cp desktop/build/bin/backtrack release-assets/backtrack-linux-amd64
+            chmod +x release-assets/backtrack-linux-amd64
+            tar -czf release-assets/backtrack-linux-amd64.tar.gz -C desktop/build/bin backtrack
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            cp desktop/build/bin/backtrack.exe release-assets/backtrack-windows-amd64.exe
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            cd desktop/build/bin
+            zip -r -q "$ROOT_DIR/release-assets/backtrack-macos-universal.zip" *.app
+          fi
+
       - name: Publish Release Assets
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            desktop/build/bin/*
+          files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
