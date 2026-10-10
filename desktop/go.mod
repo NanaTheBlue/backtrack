@@ -1,8 +1,13 @@
 module desktop
 
-go 1.25.0
+go 1.27.1
 
-require github.com/wailsapp/wails/v2 v2.16.0
+require (
+	github.com/nanatheblue/backtrack v0.0.0-00010101000000-000000000000
+	github.com/wailsapp/wails/v2 v2.16.0
+)
+
+replace github.com/nanatheblue/backtrack => ../
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect

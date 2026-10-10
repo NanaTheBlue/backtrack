@@ -23,6 +23,23 @@ func EncodeIdentify(username string, avatarID uint16) ([]byte, error) {
 	return payload, nil
 }
 
+// EncodeChatSend encodes a chat message payload (body_len(2) + body).
+func EncodeChatSend(body string) ([]byte, error) {
+	b := []byte(body)
+	if len(b) > MaxPayloadSize-2 {
+		return nil, fmt.Errorf("message body too long")
+	}
+	payload := make([]byte, 2+len(b))
+	binary.BigEndian.PutUint16(payload[0:2], uint16(len(b)))
+	copy(payload[2:], b)
+	return payload, nil
+}
+
+// EncodeSetPresence encodes a status byte payload.
+func EncodeSetPresence(status byte) ([]byte, error) {
+	return []byte{status}, nil
+}
+
 // --- Payload parsers (client → server) ---
 
 // ParseIdentify parses a MsgIdentify payload.
