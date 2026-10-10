@@ -74,7 +74,9 @@ export default function SettingsModal({
                         : 'border-green-800/80 bg-black hover:border-green-400 hover:bg-green-950/40 text-green-300'
                     }`}
                   >
-                    <span className="text-lg leading-none">{av.glyph}</span>
+                    <span className="w-7 h-7 flex items-center justify-center text-lg leading-none select-none">
+                      {av.glyph}
+                    </span>
                     <span className="text-[8px] mt-0.5 tracking-tighter truncate w-full text-center">
                       #{av.id}
                     </span>

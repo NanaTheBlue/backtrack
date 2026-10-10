@@ -34,12 +34,15 @@ export default function TerminalHeader({
         <button
           onClick={onEditUsername}
           title="Click to change operator callsign & avatar"
-          className="hover:text-green-100 hover:border-b border-green-300 cursor-pointer transition-colors flex items-center gap-1.5"
+          className="hover:text-green-100 hover:border-b border-green-300 cursor-pointer transition-colors flex items-center gap-2"
         >
-          <span className="text-base leading-none" title={avatar.label}>
+          <span
+            className="inline-flex items-center justify-center w-5 h-5 text-sm leading-none shrink-0 select-none"
+            title={avatar.label}
+          >
             {avatar.glyph}
           </span>
-          <span>
+          <span className="flex items-center gap-1">
             USER: <strong className="text-green-200">{username || 'UNIDENTIFIED'}</strong>
           </span>
           <span className="text-[10px] text-green-400 ml-0.5">[EDIT]</span>

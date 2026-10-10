@@ -55,19 +55,26 @@ export default function TerminalScreen({ messages, activeRoom = 'GLOBAL' }: Term
 
           const avatar = getAvatar(item.avatarId);
           return (
-            <div key={i} className="leading-relaxed break-all flex items-start gap-1.5">
-              {item.time && (
-                <span className="text-green-600 font-mono text-xs select-none">
-                  [{item.time}]
+            <div key={i} className="leading-relaxed break-words flex items-start gap-2">
+              <div className="inline-flex items-center gap-1.5 shrink-0 select-none h-[1.625em]">
+                {item.time && (
+                  <span className="text-green-600 font-mono text-xs">
+                    [{item.time}]
+                  </span>
+                )}
+                <span
+                  className="inline-flex items-center justify-center w-5 h-5 text-sm leading-none shrink-0"
+                  title={avatar.label}
+                >
+                  {avatar.glyph}
                 </span>
-              )}
-              <span className="text-base leading-none select-none" title={avatar.label}>
-                {avatar.glyph}
+                <span className="text-green-200 font-bold">
+                  {item.username}:
+                </span>
+              </div>
+              <span className="text-green-300 break-words flex-1 min-w-0">
+                {item.text}
               </span>
-              <span className="text-green-200 font-bold select-none">
-                {item.username}:
-              </span>
-              <span className="text-green-300">{item.text}</span>
             </div>
           );
         })}

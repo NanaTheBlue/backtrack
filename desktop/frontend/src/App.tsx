@@ -16,11 +16,10 @@ interface Peer {
 }
 
 export default function App() {
-  const [rooms, setRooms] = useState<string[]>(['GLOBAL', 'RETRO-LOUNGE', 'HARDWARE']);
+  const [rooms, setRooms] = useState<string[]>(['GLOBAL']);
   const [activeRoom, setActiveRoom] = useState<string>('GLOBAL');
   const [messages, setMessages] = useState<(string | DisplayMessage)[]>([
-    "*** BACKTRACK TCP WORKSTATION v1.0 ***",
-    "*** PROTOCOL v1.0 // AVATAR ID COMPLIANT ***",
+    "*** BACKTRACK TCP WORKSTATION v1.2 ***",
     "READY.",
   ]);
   const [username, setUsername] = useState<string>(() => {

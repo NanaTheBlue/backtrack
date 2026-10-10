@@ -97,13 +97,16 @@ export default function TerminalSidebar({
                 const av = getAvatar(peer.avatarId);
                 return (
                   <li key={peer.userId} className="flex items-center justify-between truncate py-0.5">
-                    <span className="flex items-center gap-1.5 truncate">
-                      <span className="text-sm leading-none" title={av.label}>
+                    <span className="flex items-center gap-2 truncate">
+                      <span
+                        className="inline-flex items-center justify-center w-4.5 h-4.5 text-xs leading-none shrink-0 select-none"
+                        title={av.label}
+                      >
                         {av.glyph}
                       </span>
                       <span className="truncate">{peer.username}</span>
                     </span>
-                    <span className="text-[9px] text-green-600 font-mono">#{peer.userId}</span>
+                    <span className="text-[9px] text-green-600 font-mono shrink-0">#{peer.userId}</span>
                   </li>
                 );
               })}

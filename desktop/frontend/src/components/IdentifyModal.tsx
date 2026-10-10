@@ -76,7 +76,7 @@ export default function IdentifyModal({
                   setVal(e.target.value.toUpperCase());
                   setError('');
                 }}
-                placeholder="CALLSIGN (E.G. SKYLER)"
+                placeholder="CALLSIGN (E.G. NANA-01)"
                 autoFocus
                 maxLength={24}
                 className="flex-1 bg-transparent border-none outline-none text-green-200 font-mono text-sm tracking-wider placeholder-green-800"
@@ -109,7 +109,9 @@ export default function IdentifyModal({
                         : 'border-green-800/80 bg-black/60 hover:border-green-400 hover:bg-green-950/40 text-green-300'
                     }`}
                   >
-                    <span className="text-xl leading-none">{av.glyph}</span>
+                    <span className="w-7 h-7 flex items-center justify-center text-xl leading-none select-none">
+                      {av.glyph}
+                    </span>
                     <span className="text-[9px] mt-1 tracking-tighter truncate w-full text-center">
                       #{av.id}
                     </span>
