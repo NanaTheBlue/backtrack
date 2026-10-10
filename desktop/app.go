@@ -13,6 +13,12 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// UserData stores metadata for connected peers
+type UserData struct {
+	Username string `json:"username"`
+	AvatarID uint16 `json:"avatarId"`
+}
+
 // App struct manages the Wails application and TCP client connection
 type App struct {
 	ctx         context.Context
@@ -20,14 +26,15 @@ type App struct {
 	mu          sync.Mutex
 	isConnected bool
 	username    string
+	avatarID    uint16
 	userID      uint32
-	users       map[uint32]string // userID -> username mapping
+	users       map[uint32]UserData // userID -> UserData mapping
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
 	return &App{
-		users: make(map[uint32]string),
+		users: make(map[uint32]UserData),
 	}
 }
 
@@ -43,8 +50,8 @@ func (a *App) GetMemoryUsage() string {
 	return fmt.Sprintf("%.1f MB", float64(m.Alloc)/(1024*1024))
 }
 
-// Connect establishes a TCP connection to the Backtrack server and identifies
-func (a *App) Connect(addr string, username string) error {
+// Connect establishes a TCP connection to the Backtrack server and identifies with username & avatarID
+func (a *App) Connect(addr string, username string, avatarID uint16) error {
 	a.mu.Lock()
 	if a.isConnected && a.conn != nil {
 		a.conn.Close()
@@ -57,8 +64,8 @@ func (a *App) Connect(addr string, username string) error {
 		return fmt.Errorf("connection failed: %w", err)
 	}
 
-	// 1. Send MsgIdentify payload
-	identifyPayload, err := protocol.EncodeIdentify(username, 1)
+	// 1. Send MsgIdentify payload with chosen avatarID
+	identifyPayload, err := protocol.EncodeIdentify(username, avatarID)
 	if err != nil {
 		conn.Close()
 		return fmt.Errorf("identify encoding failed: %w", err)
@@ -72,8 +79,9 @@ func (a *App) Connect(addr string, username string) error {
 	a.mu.Lock()
 	a.conn = conn
 	a.username = username
+	a.avatarID = avatarID
 	a.isConnected = true
-	a.users = make(map[uint32]string)
+	a.users = make(map[uint32]UserData)
 	a.mu.Unlock()
 
 	// Notify frontend that TCP connection is established
@@ -81,6 +89,7 @@ func (a *App) Connect(addr string, username string) error {
 		"connected": true,
 		"address":   addr,
 		"username":  username,
+		"avatarId":  avatarID,
 	})
 
 	// Start reading server messages in background goroutine
@@ -163,35 +172,38 @@ func (a *App) readLoop(conn net.Conn) {
 			if err == nil {
 				a.mu.Lock()
 				a.userID = uid
-				a.users[uid] = a.username
+				a.users[uid] = UserData{Username: a.username, AvatarID: a.avatarID}
 				a.mu.Unlock()
 				runtime.EventsEmit(a.ctx, "welcome", map[string]interface{}{
-					"userId": uid,
+					"userId":   uid,
+					"avatarId": a.avatarID,
 				})
 				runtime.EventsEmit(a.ctx, "log_message", fmt.Sprintf("*** CONNECTED! ASSIGNED USER ID #%d ***", uid))
 			}
 
 		case protocol.MsgUserInfo:
-			uid, _, _, name, err := protocol.ParseUserInfo(msg.Payload)
+			uid, avatarID, _, name, err := protocol.ParseUserInfo(msg.Payload)
 			if err == nil {
 				a.mu.Lock()
-				a.users[uid] = name
+				a.users[uid] = UserData{Username: name, AvatarID: avatarID}
 				a.mu.Unlock()
 				runtime.EventsEmit(a.ctx, "user_info", map[string]interface{}{
 					"userId":   uid,
 					"username": name,
+					"avatarId": avatarID,
 				})
 			}
 
 		case protocol.MsgUserJoined:
-			uid, _, name, err := protocol.ParseUserJoined(msg.Payload)
+			uid, avatarID, name, err := protocol.ParseUserJoined(msg.Payload)
 			if err == nil {
 				a.mu.Lock()
-				a.users[uid] = name
+				a.users[uid] = UserData{Username: name, AvatarID: avatarID}
 				a.mu.Unlock()
 				runtime.EventsEmit(a.ctx, "user_joined", map[string]interface{}{
 					"userId":   uid,
 					"username": name,
+					"avatarId": avatarID,
 				})
 				runtime.EventsEmit(a.ctx, "log_message", fmt.Sprintf("*** USER JOINED: %s (ID #%d) ***", name, uid))
 			}
@@ -200,9 +212,10 @@ func (a *App) readLoop(conn net.Conn) {
 			uid, err := protocol.ParseUserLeft(msg.Payload)
 			if err == nil {
 				a.mu.Lock()
-				name := a.users[uid]
+				uData := a.users[uid]
 				delete(a.users, uid)
 				a.mu.Unlock()
+				name := uData.Username
 				if name == "" {
 					name = fmt.Sprintf("USER #%d", uid)
 				}
@@ -217,19 +230,20 @@ func (a *App) readLoop(conn net.Conn) {
 			uid, body, err := protocol.ParseChatRecv(msg.Payload)
 			if err == nil {
 				a.mu.Lock()
-				senderName := a.users[uid]
-				if senderName == "" {
+				sender := a.users[uid]
+				if sender.Username == "" {
 					if uid == a.userID {
-						senderName = a.username
+						sender = UserData{Username: a.username, AvatarID: a.avatarID}
 					} else {
-						senderName = fmt.Sprintf("USER#%d", uid)
+						sender = UserData{Username: fmt.Sprintf("USER#%d", uid), AvatarID: 0}
 					}
 				}
 				a.mu.Unlock()
 
 				runtime.EventsEmit(a.ctx, "chat_message", map[string]interface{}{
 					"userId":   uid,
-					"username": senderName,
+					"username": sender.Username,
+					"avatarId": sender.AvatarID,
 					"body":     body,
 					"time":     time.Now().Format("15:04:05"),
 				})

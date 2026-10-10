@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { RETRO_AVATARS } from '../utils/avatars';
 
 interface IdentifyModalProps {
   isOpen: boolean;
   initialUsername: string;
-  onSave: (username: string) => void;
+  initialAvatarId?: number;
+  onSave: (username: string, avatarId: number) => void;
   onCancel?: () => void;
   canCancel?: boolean;
 }
@@ -11,11 +13,13 @@ interface IdentifyModalProps {
 export default function IdentifyModal({
   isOpen,
   initialUsername,
+  initialAvatarId = 1,
   onSave,
   onCancel,
   canCancel = false,
 }: IdentifyModalProps) {
   const [val, setVal] = useState(initialUsername || '');
+  const [selectedAvatarId, setSelectedAvatarId] = useState<number>(initialAvatarId || 1);
   const [error, setError] = useState('');
 
   if (!isOpen) return null;
@@ -32,7 +36,7 @@ export default function IdentifyModal({
       return;
     }
     setError('');
-    onSave(clean);
+    onSave(clean, selectedAvatarId);
   };
 
   return (
@@ -41,7 +45,7 @@ export default function IdentifyModal({
         {/* Header */}
         <div className="border-b-2 border-green-400 pb-2 flex justify-between items-center">
           <span className="font-bold text-sm tracking-wider text-green-200">
-            === OPERATOR CALLSIGN REQUIRED ===
+            === OPERATOR IDENTIFICATION ===
           </span>
           {canCancel && onCancel && (
             <button
@@ -54,14 +58,14 @@ export default function IdentifyModal({
         </div>
 
         <p className="text-xs text-green-400/90 leading-relaxed">
-          THE BACKTRACK PROTOCOL REQUIRES A VALID OPERATOR CALLSIGN PRIOR TO ESTABLISHING TCP TRANSMISSION.
+          THE BACKTRACK PROTOCOL (0x01 IDENTIFY) REQUIRES AN OPERATOR CALLSIGN AND AVATAR ID (UINT16).
         </p>
 
         {/* Input Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-green-300 mb-1.5">
-              SET USERNAME / HANDLE:
+              1. CALLSIGN / USERNAME:
             </label>
             <div className="flex items-center gap-2 border-2 border-green-400 bg-black/80 px-3 py-2">
               <span className="text-green-400 font-bold">&gt;</span>
@@ -72,7 +76,7 @@ export default function IdentifyModal({
                   setVal(e.target.value.toUpperCase());
                   setError('');
                 }}
-                placeholder="CALLSIGN (E.G. NANA-01)"
+                placeholder="CALLSIGN (E.G. SKYLER)"
                 autoFocus
                 maxLength={24}
                 className="flex-1 bg-transparent border-none outline-none text-green-200 font-mono text-sm tracking-wider placeholder-green-800"
@@ -85,7 +89,37 @@ export default function IdentifyModal({
             )}
           </div>
 
-          <div className="pt-2 flex justify-end gap-2">
+          {/* Avatar Selector Grid */}
+          <div>
+            <label className="block text-xs font-bold text-green-300 mb-1.5">
+              2. SELECT RETRO AVATAR:
+            </label>
+            <div className="grid grid-cols-5 gap-2 bg-black/60 border-2 border-green-500/50 p-2">
+              {RETRO_AVATARS.map((av) => {
+                const isSelected = selectedAvatarId === av.id;
+                return (
+                  <button
+                    key={av.id}
+                    type="button"
+                    onClick={() => setSelectedAvatarId(av.id)}
+                    title={`${av.label} (ID: ${av.id})`}
+                    className={`flex flex-col items-center justify-center p-1.5 border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-green-300 bg-green-400 text-black shadow-[0_0_8px_rgba(74,222,128,0.8)] scale-105'
+                        : 'border-green-800/80 bg-black/60 hover:border-green-400 hover:bg-green-950/40 text-green-300'
+                    }`}
+                  >
+                    <span className="text-xl leading-none">{av.glyph}</span>
+                    <span className="text-[9px] mt-1 tracking-tighter truncate w-full text-center">
+                      #{av.id}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="pt-2 flex justify-end gap-2 border-t border-green-500/40">
             {canCancel && onCancel && (
               <button
                 type="button"
@@ -107,4 +141,3 @@ export default function IdentifyModal({
     </div>
   );
 }
-

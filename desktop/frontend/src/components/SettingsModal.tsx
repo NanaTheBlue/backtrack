@@ -1,3 +1,5 @@
+import { RETRO_AVATARS } from '../utils/avatars';
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -5,6 +7,8 @@ interface SettingsModalProps {
   setServerAddr: (addr: string) => void;
   username: string;
   setUsername: (name: string) => void;
+  avatarId: number;
+  setAvatarId: (id: number) => void;
 }
 
 export default function SettingsModal({
@@ -14,12 +18,14 @@ export default function SettingsModal({
   setServerAddr,
   username,
   setUsername,
+  avatarId,
+  setAvatarId,
 }: SettingsModalProps) {
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 select-none">
-      <div className="w-full max-w-md border-2 border-green-400 bg-black p-5 box-glow text-green-300 font-mono space-y-4">
+      <div className="w-full max-w-md border-2 border-green-400 bg-black p-5 box-glow text-green-300 font-mono space-y-4 max-h-[90vh] overflow-y-auto">
         {/* Title */}
         <div className="flex items-center justify-between border-b-2 border-green-400 pb-2">
           <span className="font-bold text-sm tracking-wider text-green-200">
@@ -51,6 +57,35 @@ export default function SettingsModal({
 
           <div>
             <label className="block text-green-400 mb-1 font-bold">
+              OPERATOR RETRO AVATAR (UINT16):
+            </label>
+            <div className="grid grid-cols-5 gap-1.5 bg-black/60 border border-green-500/50 p-2">
+              {RETRO_AVATARS.map((av) => {
+                const isSelected = avatarId === av.id;
+                return (
+                  <button
+                    key={av.id}
+                    type="button"
+                    onClick={() => setAvatarId(av.id)}
+                    title={`${av.label} (ID: ${av.id})`}
+                    className={`flex flex-col items-center justify-center p-1 border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-green-300 bg-green-400 text-black shadow-[0_0_6px_rgba(74,222,128,0.8)] scale-105'
+                        : 'border-green-800/80 bg-black hover:border-green-400 hover:bg-green-950/40 text-green-300'
+                    }`}
+                  >
+                    <span className="text-lg leading-none">{av.glyph}</span>
+                    <span className="text-[8px] mt-0.5 tracking-tighter truncate w-full text-center">
+                      #{av.id}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-green-400 mb-1 font-bold">
               TCP SERVER TARGET:
             </label>
             <input
@@ -66,11 +101,9 @@ export default function SettingsModal({
             <span className="text-green-400 font-bold">[ACTIVE]</span>
           </div>
 
-        
-
           <div className="flex justify-between items-center">
             <span>PROTOCOL SPEC:</span>
-            <span className="text-green-400 font-bold">BACKTRACK v1.0</span>
+            <span className="text-green-400 font-bold">BACKTRACK v1.0 (AVATAR ID)</span>
           </div>
         </div>
 

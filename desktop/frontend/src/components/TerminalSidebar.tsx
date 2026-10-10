@@ -1,6 +1,9 @@
+import { getAvatar } from '../utils/avatars';
+
 interface Peer {
   userId: number;
   username: string;
+  avatarId?: number;
 }
 
 interface TerminalSidebarProps {
@@ -90,15 +93,20 @@ export default function TerminalSidebar({
             <div className="text-[11px] text-green-600 italic">No peers connected</div>
           ) : (
             <ul className="space-y-1 text-xs text-green-300/90 font-mono max-h-36 overflow-y-auto pr-1">
-              {peers.map((peer) => (
-                <li key={peer.userId} className="flex items-center justify-between truncate">
-                  <span className="flex items-center gap-1.5 truncate">
-                    <span className="text-green-400 text-[9px]">●</span>
-                    <span className="truncate">{peer.username}</span>
-                  </span>
-                  <span className="text-[9px] text-green-600">#{peer.userId}</span>
-                </li>
-              ))}
+              {peers.map((peer) => {
+                const av = getAvatar(peer.avatarId);
+                return (
+                  <li key={peer.userId} className="flex items-center justify-between truncate py-0.5">
+                    <span className="flex items-center gap-1.5 truncate">
+                      <span className="text-sm leading-none" title={av.label}>
+                        {av.glyph}
+                      </span>
+                      <span className="truncate">{peer.username}</span>
+                    </span>
+                    <span className="text-[9px] text-green-600 font-mono">#{peer.userId}</span>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

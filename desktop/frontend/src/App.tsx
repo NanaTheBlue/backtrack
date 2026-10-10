@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import CrtOverlay from './components/CrtOverlay';
 import TerminalHeader from './components/TerminalHeader';
 import TerminalSidebar from './components/TerminalSidebar';
-import TerminalScreen from './components/TerminalScreen';
+import TerminalScreen, { DisplayMessage } from './components/TerminalScreen';
 import TerminalInput from './components/TerminalInput';
 import SettingsModal from './components/SettingsModal';
 import IdentifyModal from './components/IdentifyModal';
@@ -12,17 +12,23 @@ import { EventsOn } from '../wailsjs/runtime/runtime';
 interface Peer {
   userId: number;
   username: string;
+  avatarId?: number;
 }
 
 export default function App() {
   const [rooms, setRooms] = useState<string[]>(['GLOBAL', 'RETRO-LOUNGE', 'HARDWARE']);
   const [activeRoom, setActiveRoom] = useState<string>('GLOBAL');
-  const [messages, setMessages] = useState<string[]>([
+  const [messages, setMessages] = useState<(string | DisplayMessage)[]>([
     "*** BACKTRACK TCP WORKSTATION v1.0 ***",
+    "*** PROTOCOL v1.0 // AVATAR ID COMPLIANT ***",
     "READY.",
   ]);
   const [username, setUsername] = useState<string>(() => {
     return localStorage.getItem('backtrack_username') || '';
+  });
+  const [avatarId, setAvatarId] = useState<number>(() => {
+    const saved = localStorage.getItem('backtrack_avatar_id');
+    return saved ? parseInt(saved, 10) : 1;
   });
   const [isIdentifyOpen, setIsIdentifyOpen] = useState<boolean>(() => {
     return !localStorage.getItem('backtrack_username');
@@ -33,14 +39,16 @@ export default function App() {
   const [serverAddr, setServerAddr] = useState<string>("localhost:9000");
   const [ramUsage, setRamUsage] = useState<string>("");
 
-  const saveUsername = (newName: string) => {
+  const saveIdentity = (newName: string, newAvatarId: number) => {
     setUsername(newName);
+    setAvatarId(newAvatarId);
     localStorage.setItem('backtrack_username', newName);
+    localStorage.setItem('backtrack_avatar_id', newAvatarId.toString());
     setIsIdentifyOpen(false);
     setMessages((prev) => [
       ...prev,
-      `*** OPERATOR CALLSIGN SET TO: ${newName} ***`,
-      "READY TO CONNECT. CLICK [▶] CONNECT TCP TO LINK WITH SERVER."
+      `*** OPERATOR CALLSIGN SET: ${newName} (AVATAR #${newAvatarId}) ***`,
+      "READY TO CONNECT. CLICK [▶] CONNECT TCP TO LINK WITH SERVER.",
     ]);
   };
 
@@ -58,28 +66,49 @@ export default function App() {
       setMessages((prev) => [...prev, logMsg]);
     });
 
-    // 3. Incoming TCP chat message listener
+    // 3. Incoming TCP chat message listener with avatar metadata
     const unsubChat = EventsOn(
       'chat_message',
-      (data: { userId: number; username: string; body: string; time: string }) => {
-        setMessages((prev) => [...prev, `[${data.time}] ${data.username}: ${data.body}`]);
+      (data: { userId: number; username: string; avatarId: number; body: string; time: string }) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            text: data.body,
+            username: data.username,
+            avatarId: data.avatarId,
+            time: data.time,
+            userId: data.userId,
+          },
+        ]);
       }
     );
 
     // 4. Online peer tracking from protocol events
-    const unsubUserInfo = EventsOn('user_info', (data: { userId: number; username: string }) => {
-      setPeers((prev) => {
-        if (prev.some((p) => p.userId === data.userId)) return prev;
-        return [...prev, { userId: data.userId, username: data.username }];
-      });
-    });
+    const unsubUserInfo = EventsOn(
+      'user_info',
+      (data: { userId: number; username: string; avatarId: number }) => {
+        setPeers((prev) => {
+          if (prev.some((p) => p.userId === data.userId)) return prev;
+          return [
+            ...prev,
+            { userId: data.userId, username: data.username, avatarId: data.avatarId },
+          ];
+        });
+      }
+    );
 
-    const unsubUserJoined = EventsOn('user_joined', (data: { userId: number; username: string }) => {
-      setPeers((prev) => {
-        if (prev.some((p) => p.userId === data.userId)) return prev;
-        return [...prev, { userId: data.userId, username: data.username }];
-      });
-    });
+    const unsubUserJoined = EventsOn(
+      'user_joined',
+      (data: { userId: number; username: string; avatarId: number }) => {
+        setPeers((prev) => {
+          if (prev.some((p) => p.userId === data.userId)) return prev;
+          return [
+            ...prev,
+            { userId: data.userId, username: data.username, avatarId: data.avatarId },
+          ];
+        });
+      }
+    );
 
     const unsubUserLeft = EventsOn('user_left', (data: { userId: number; username: string }) => {
       setPeers((prev) => prev.filter((p) => p.userId !== data.userId));
@@ -128,9 +157,12 @@ export default function App() {
       return;
     }
 
-    setMessages((prev) => [...prev, `*** DIALING TCP ${serverAddr} AS ${username}... ***`]);
+    setMessages((prev) => [
+      ...prev,
+      `*** DIALING TCP ${serverAddr} AS ${username} (AVATAR #${avatarId})... ***`,
+    ]);
     try {
-      await Connect(serverAddr, username);
+      await Connect(serverAddr, username, avatarId);
     } catch (err: any) {
       setMessages((prev) => [...prev, `!!! CONNECTION FAILED: ${err} !!!`]);
     }
@@ -181,6 +213,7 @@ export default function App() {
       {/* Top Header */}
       <TerminalHeader
         username={username}
+        avatarId={avatarId}
         isOnline={isOnline}
         onEditUsername={() => setIsIdentifyOpen(true)}
         ramUsage={ramUsage}
@@ -210,7 +243,8 @@ export default function App() {
       <IdentifyModal
         isOpen={isIdentifyOpen}
         initialUsername={username}
-        onSave={saveUsername}
+        initialAvatarId={avatarId}
+        onSave={saveIdentity}
         canCancel={!!username}
         onCancel={() => setIsIdentifyOpen(false)}
       />
@@ -225,6 +259,11 @@ export default function App() {
         setUsername={(name) => {
           setUsername(name);
           localStorage.setItem('backtrack_username', name);
+        }}
+        avatarId={avatarId}
+        setAvatarId={(id) => {
+          setAvatarId(id);
+          localStorage.setItem('backtrack_avatar_id', id.toString());
         }}
       />
     </div>
