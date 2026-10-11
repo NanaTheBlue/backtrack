@@ -45,11 +45,15 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// GetMemoryUsage returns the actual live memory allocated by the application
+// GetMemoryUsage returns the actual live process RAM (Resident Set Size / Working Set) matching Task Manager
 func (a *App) GetMemoryUsage() string {
+	bytes, err := getProcessRSS()
+	if err == nil && bytes > 0 {
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	}
 	var m goruntime.MemStats
 	goruntime.ReadMemStats(&m)
-	return fmt.Sprintf("%.1f MB", float64(m.Alloc)/(1024*1024))
+	return fmt.Sprintf("%.1f MB", float64(m.Sys)/(1024*1024))
 }
 
 // writeMessage safely writes a framed protocol message to the active connection
