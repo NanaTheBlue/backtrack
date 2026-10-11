@@ -49,16 +49,16 @@ type User struct {
 	lastRefill time.Time
 }
 
-// allowMessage checks if the user is within their chat rate limit (token bucket: 5 msgs/sec, burst 10).
+// allowMessage checks if the user is within their chat rate limit (token bucket: 1 msg/sec, burst 3).
 func (u *User) allowMessage() bool {
 	u.rateMu.Lock()
 	defer u.rateMu.Unlock()
 	now := time.Now()
 	elapsed := now.Sub(u.lastRefill).Seconds()
 	u.lastRefill = now
-	u.tokens += elapsed * 5.0
-	if u.tokens > 10.0 {
-		u.tokens = 10.0
+	u.tokens += elapsed * 1.0
+	if u.tokens > 3.0 {
+		u.tokens = 3.0
 	}
 	if u.tokens >= 1.0 {
 		u.tokens -= 1.0
@@ -238,7 +238,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		conn:       conn,
 		outbox:     make(chan outMsg, outboxSize),
 		quit:       make(chan struct{}),
-		tokens:     10.0,
+		tokens:     3.0,
 		lastRefill: time.Now(),
 	}
 
@@ -300,7 +300,7 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 	case protocol.MsgChatSend:
 		if !user.allowMessage() {
 			slog.Warn("rate limit exceeded", "username", user.Username)
-			user.send(protocol.MsgServerError, protocol.ErrorPayload("rate limit exceeded: max 5 msgs/sec"))
+			user.send(protocol.MsgServerError, protocol.ErrorPayload("rate limit exceeded: please slow down (max 1 msg/sec)"))
 			return
 		}
 		body, err := protocol.ParseChatSend(msg.Payload)

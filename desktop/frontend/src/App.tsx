@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import CrtOverlay from './components/CrtOverlay';
 import TerminalHeader from './components/TerminalHeader';
 import TerminalSidebar from './components/TerminalSidebar';
@@ -33,6 +33,8 @@ export default function App() {
     return !localStorage.getItem('backtrack_username');
   });
   const [isOnline, setIsOnline] = useState<boolean>(false);
+  const [isRateLimited, setIsRateLimited] = useState<boolean>(false);
+  const rateLimitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [serverAddr, setServerAddr] = useState<string>("localhost:9000");
@@ -117,6 +119,16 @@ export default function App() {
       setPeers((prev) => prev.filter((p) => p.userId !== data.userId));
     });
 
+    // 5. Rate limit warning listener
+    const unsubRateLimited = EventsOn('rate_limited', (data: { message: string }) => {
+      setIsRateLimited(true);
+      appendMessage(`*** [⚠ THROTTLED] ${data.message.toUpperCase()} — PAUSING TRANSMISSION ***`);
+      if (rateLimitTimerRef.current) clearTimeout(rateLimitTimerRef.current);
+      rateLimitTimerRef.current = setTimeout(() => {
+        setIsRateLimited(false);
+      }, 1500);
+    });
+
     // Initial connection check
     IsConnected()
       .then((connected) => {
@@ -135,12 +147,14 @@ export default function App() {
 
     return () => {
       clearInterval(memInterval);
+      if (rateLimitTimerRef.current) clearTimeout(rateLimitTimerRef.current);
       unsubStatus?.();
       unsubLog?.();
       unsubChat?.();
       unsubUserInfo?.();
       unsubUserJoined?.();
       unsubUserLeft?.();
+      unsubRateLimited?.();
     };
   }, []);
 
@@ -168,6 +182,11 @@ export default function App() {
   const handleSendMessage = async (text: string) => {
     if (!isOnline) {
       appendMessage('!!! CANNOT TRANSMIT: NOT CONNECTED TO TCP SERVER. CLICK [▶] CONNECT TCP FIRST !!!');
+      return;
+    }
+
+    if (isRateLimited) {
+      appendMessage('!!! CANNOT TRANSMIT: RATE LIMIT COOLDOWN ACTIVE. PLEASE WAIT A SECOND !!!');
       return;
     }
 
@@ -226,7 +245,11 @@ export default function App() {
 
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           <TerminalScreen messages={messages} activeRoom={activeRoom} />
-          <TerminalInput username={username || 'GUEST'} onSendMessage={handleSendMessage} />
+          <TerminalInput
+            username={username || 'GUEST'}
+            onSendMessage={handleSendMessage}
+            isRateLimited={isRateLimited}
+          />
         </div>
       </div>
 

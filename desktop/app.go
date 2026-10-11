@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -268,6 +269,11 @@ func (a *App) readLoop(conn net.Conn) {
 			errMsg, err := protocol.ParseServerError(msg.Payload)
 			if err == nil {
 				runtime.EventsEmit(a.ctx, "log_message", fmt.Sprintf("!!! SERVER ERROR: %s !!!", errMsg))
+				if strings.Contains(strings.ToLower(errMsg), "rate limit") {
+					runtime.EventsEmit(a.ctx, "rate_limited", map[string]interface{}{
+						"message": errMsg,
+					})
+				}
 			}
 		}
 	}
