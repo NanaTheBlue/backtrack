@@ -8,8 +8,12 @@ import (
 
 // Framing: Message, ReadMessage, WriteMessage, HeaderSize, MaxPayloadSize.
 
-// MaxPayloadSize is the maximum allowed payload size (64 KB).
+// MaxPayloadSize is the maximum allowed general payload size (64 KB).
 const MaxPayloadSize = 65535
+
+// MaxClientPayloadSize is the maximum allowed payload size for client messages (8 KB).
+// Valid client messages (Identify, ChatSend, SetPresence, Pong) do not exceed ~4 KB.
+const MaxClientPayloadSize = 8192
 
 // HeaderSize is the 3-byte message header (type + length).
 const HeaderSize = 3
@@ -22,15 +26,23 @@ type Message struct {
 	Payload []byte
 }
 
-// ReadMessage reads a single framed message from r.
+// ReadMessage reads a single framed message from r with default MaxPayloadSize.
 func ReadMessage(r io.Reader) (Message, error) {
+	return ReadMessageWithLimit(r, MaxPayloadSize)
+}
+
+// ReadMessageWithLimit reads a single framed message from r, enforcing maxLen before allocation.
+func ReadMessageWithLimit(r io.Reader, maxLen uint32) (Message, error) {
 	var header [HeaderSize]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return Message{}, err
 	}
 
 	msgType := header[0]
-	length := binary.BigEndian.Uint16(header[1:3])
+	length := uint32(binary.BigEndian.Uint16(header[1:3]))
+	if length > maxLen {
+		return Message{}, fmt.Errorf("payload size %d exceeds limit of %d bytes", length, maxLen)
+	}
 
 	payload := make([]byte, length)
 	if length > 0 {

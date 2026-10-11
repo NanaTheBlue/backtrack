@@ -1,6 +1,9 @@
 package server
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/nanatheblue/backtrack/protocol"
@@ -14,6 +17,12 @@ import (
 //
 // The hub NEVER does socket I/O. It only pushes into outboxes via user.send(),
 // which is non-blocking. Each user's writeLoop does the actual writing.
+
+// registerEvent asks the hub to register a new user and confirms uniqueness.
+type registerEvent struct {
+	user *User
+	err  chan error
+}
 
 // chatEvent asks the hub to broadcast a chat message from a user.
 type chatEvent struct {
@@ -31,18 +40,19 @@ type presenceEvent struct {
 type Hub struct {
 	users map[uint32]*User // owned by Run(); never touch it from another goroutine
 
-	register   chan *User
+	register   chan registerEvent
 	unregister chan *User
 	chat       chan chatEvent
 	presence   chan presenceEvent
 	done       chan struct{} // closed by Stop() to shut the hub down
+	stopOnce   sync.Once     // guarantees Stop() only closes done once
 }
 
 // NewHub creates a hub. Call Run() in its own goroutine to start it.
 func NewHub() *Hub {
 	return &Hub{
 		users:      make(map[uint32]*User),
-		register:   make(chan *User),
+		register:   make(chan registerEvent),
 		unregister: make(chan *User),
 		chat:       make(chan chatEvent),
 		presence:   make(chan presenceEvent),
@@ -55,8 +65,8 @@ func NewHub() *Hub {
 func (h *Hub) Run() {
 	for {
 		select {
-		case u := <-h.register:
-			h.handleRegister(u)
+		case req := <-h.register:
+			h.handleRegister(req)
 		case u := <-h.unregister:
 			h.handleUnregister(u)
 		case e := <-h.chat:
@@ -73,11 +83,11 @@ func (h *Hub) Run() {
 	}
 }
 
-// Stop shuts the hub down.
+// Stop shuts the hub down safely. Multiple calls will not panic.
 func (h *Hub) Stop() {
-	var once sync.Once
-	once.Do(func() { close(h.done) })
-	// Note: This ensures that the hub is only stopped once, even if Stop() is called multiple times.
+	h.stopOnce.Do(func() {
+		close(h.done)
+	})
 }
 
 // --- Event senders (called from connection goroutines) ---
@@ -85,14 +95,14 @@ func (h *Hub) Stop() {
 // These are what handleConn calls instead of touching state directly.
 //
 
-// Register adds a user to the chat.
-func (h *Hub) Register(u *User) {
+// Register adds a user to the chat if callsign is not already in use.
+func (h *Hub) Register(u *User) error {
+	errChan := make(chan error, 1)
 	select {
-	case h.register <- u:
-		return
+	case h.register <- registerEvent{user: u, err: errChan}:
+		return <-errChan
 	case <-h.done:
-		// hub has been stopped, so we should not attempt to register the user
-		return
+		return errors.New("server shutting down")
 	}
 }
 
@@ -110,16 +120,12 @@ func (h *Hub) Unregister(u *User) {
 // Chat broadcasts a chat message from a user.
 func (h *Hub) Chat(from *User, body string) {
 	select {
-
 	case h.chat <- chatEvent{from: from, body: body}:
 		return
-
 	case <-h.done:
 		// hub has been stopped, so we should not attempt to send the chat message
 		return
-
 	}
-
 }
 
 // SetPresence changes a user's status and announces it.
@@ -135,12 +141,23 @@ func (h *Hub) SetPresence(u *User, status byte) {
 
 // --- Event handlers (only ever called from Run) ---
 
-func (h *Hub) handleRegister(u *User) {
+func (h *Hub) handleRegister(req registerEvent) {
+	u := req.user
+
+	// Verify callsign is not already in use by another online peer (case-insensitive)
+	for _, existing := range h.users {
+		if strings.EqualFold(existing.Username, u.Username) {
+			req.err <- fmt.Errorf("callsign %q is already online", u.Username)
+			return
+		}
+	}
+
 	// add u to h.users
 	h.users[u.ID] = u
+	req.err <- nil
+
 	// send u a Welcome with their user ID
 	welcomeMSG := protocol.WelcomePayload(u.ID)
-
 	u.send(protocol.MsgWelcome, welcomeMSG)
 
 	// send u a UserInfo for every OTHER user already online
@@ -151,10 +168,10 @@ func (h *Hub) handleRegister(u *User) {
 		userInfoMSG := protocol.UserInfoPayload(other.ID, other.AvatarID, other.Status, other.Username)
 		u.send(protocol.MsgUserInfo, userInfoMSG)
 	}
-	//announce UserJoined to everyone except u
+
+	// announce UserJoined to everyone except u
 	joinMSG := protocol.UserJoinedPayload(u.ID, u.AvatarID, u.Username)
 	h.broadcast(protocol.MsgUserJoined, joinMSG, u.ID)
-
 }
 
 func (h *Hub) handleUnregister(u *User) {

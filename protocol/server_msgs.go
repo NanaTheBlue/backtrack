@@ -20,6 +20,9 @@ func WelcomePayload(userID uint32) []byte {
 // ChatRecvPayload builds the payload for MsgChatRecv.
 func ChatRecvPayload(userID uint32, body string) []byte {
 	b := []byte(body)
+	if len(b) > MaxChatBodyLen {
+		b = b[:MaxChatBodyLen]
+	}
 	buf := make([]byte, 4+2+len(b))
 	binary.BigEndian.PutUint32(buf[0:4], userID)
 	binary.BigEndian.PutUint16(buf[4:6], uint16(len(b)))

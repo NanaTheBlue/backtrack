@@ -21,7 +21,10 @@ const (
 	readTimeout = 60 * time.Second
 
 	// Max queued outbound messages per user before we drop them.
-	outboxSize = 64
+	outboxSize = 256
+
+	// MaxConcurrentConnections is the maximum number of simultaneous clients allowed.
+	defaultMaxConnections = 1000
 )
 
 // outMsg is a message queued in a user's outbox.
@@ -40,6 +43,28 @@ type User struct {
 	outbox    chan outMsg // buffered channel for non-blocking sends
 	quit      chan struct{}
 	closeOnce sync.Once
+
+	rateMu     sync.Mutex
+	tokens     float64
+	lastRefill time.Time
+}
+
+// allowMessage checks if the user is within their chat rate limit (token bucket: 5 msgs/sec, burst 10).
+func (u *User) allowMessage() bool {
+	u.rateMu.Lock()
+	defer u.rateMu.Unlock()
+	now := time.Now()
+	elapsed := now.Sub(u.lastRefill).Seconds()
+	u.lastRefill = now
+	u.tokens += elapsed * 5.0
+	if u.tokens > 10.0 {
+		u.tokens = 10.0
+	}
+	if u.tokens >= 1.0 {
+		u.tokens -= 1.0
+		return true
+	}
+	return false
 }
 
 // send queues a message to the user's outbox. If the outbox is full
@@ -102,10 +127,11 @@ func (u *User) writeLoop() {
 
 // Server holds the state for the TCP chat server.
 type Server struct {
-	listener net.Listener
-	hub      *Hub
-	mu       sync.RWMutex
-	nextID   atomic.Uint32
+	listener    net.Listener
+	hub         *Hub
+	mu          sync.RWMutex
+	nextID      atomic.Uint32
+	connLimiter chan struct{}
 }
 
 // New creates a new Server listening on addr (e.g. ":9000").
@@ -116,8 +142,9 @@ func New(addr string) (*Server, error) {
 	}
 
 	s := &Server{
-		listener: ln,
-		hub:      NewHub(),
+		listener:    ln,
+		hub:         NewHub(),
+		connLimiter: make(chan struct{}, defaultMaxConnections),
 	}
 	s.nextID.Store(1)
 	go s.hub.Run()
@@ -138,7 +165,14 @@ func (s *Server) Run() error {
 			time.Sleep(100 * time.Millisecond) // avoid busy loop
 			continue
 		}
-		go s.handleConn(conn)
+
+		select {
+		case s.connLimiter <- struct{}{}:
+			go s.handleConn(conn)
+		default:
+			slog.Warn("max concurrent connections reached, rejecting connection", "remote_addr", conn.RemoteAddr().String())
+			conn.Close()
+		}
 	}
 }
 
@@ -156,13 +190,17 @@ func (s *Server) Close() error {
 
 // handleConn runs the full lifecycle of a single client connection.
 func (s *Server) handleConn(conn net.Conn) {
+	defer func() {
+		<-s.connLimiter
+	}()
+
 	reader := bufio.NewReader(conn)
 
 	// Give the client a few seconds to identify itself.
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
 	// --- Wait for MsgIdentify ---
-	msg, err := protocol.ReadMessage(reader)
+	msg, err := protocol.ReadMessageWithLimit(reader, protocol.MaxClientPayloadSize)
 	if err != nil {
 		slog.Error("read error", "remote_addr", conn.RemoteAddr().String(), "error", err)
 		conn.Close()
@@ -180,26 +218,42 @@ func (s *Server) handleConn(conn net.Conn) {
 	username, avatarID, err := protocol.ParseIdentify(msg.Payload)
 	if err != nil {
 		slog.Warn("bad identify", "remote_addr", conn.RemoteAddr().String(), "error", err)
+		w := bufio.NewWriter(conn)
+		protocol.WriteMessage(w, protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
+		w.Flush()
 		conn.Close()
 		return
 	}
 
 	// --- Create user ---
-	userID := s.nextID.Add(1) - 1
+	userID := s.nextID.Add(1)
+	if userID == 0 {
+		userID = s.nextID.Add(1)
+	}
 	user := &User{
-		ID:       userID,
-		Username: username,
-		AvatarID: avatarID,
-		Status:   protocol.StatusOnline,
-		conn:     conn,
-		outbox:   make(chan outMsg, outboxSize),
-		quit:     make(chan struct{}),
+		ID:         userID,
+		Username:   username,
+		AvatarID:   avatarID,
+		Status:     protocol.StatusOnline,
+		conn:       conn,
+		outbox:     make(chan outMsg, outboxSize),
+		quit:       make(chan struct{}),
+		tokens:     10.0,
+		lastRefill: time.Now(),
 	}
 
 	// Start the write loop
 	go user.writeLoop()
 
-	s.hub.Register(user)
+	if err := s.hub.Register(user); err != nil {
+		slog.Warn("registration rejected", "username", username, "error", err)
+		w := bufio.NewWriter(conn)
+		protocol.WriteMessage(w, protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
+		w.Flush()
+		user.close()
+		return
+	}
+
 	// Start pinging the client periodically.
 	go s.pingLoop(user)
 
@@ -208,7 +262,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		// Reset the read deadline on every successful read.
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 
-		msg, err := protocol.ReadMessage(reader)
+		msg, err := protocol.ReadMessageWithLimit(reader, protocol.MaxClientPayloadSize)
 		if err != nil {
 			break // client disconnected or timed out
 		}
@@ -244,6 +298,11 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 	switch msg.Type {
 
 	case protocol.MsgChatSend:
+		if !user.allowMessage() {
+			slog.Warn("rate limit exceeded", "username", user.Username)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload("rate limit exceeded: max 5 msgs/sec"))
+			return
+		}
 		body, err := protocol.ParseChatSend(msg.Payload)
 		if err != nil {
 			slog.Warn("bad chat", "username", user.Username, "error", err)
