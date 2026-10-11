@@ -38,17 +38,24 @@ export default function App() {
   const [serverAddr, setServerAddr] = useState<string>("localhost:9000");
   const [ramUsage, setRamUsage] = useState<string>("");
 
+  const appendMessage = (msg: string | DisplayMessage) => {
+    setMessages((prev) => {
+      const maxCount = 500;
+      if (prev.length >= maxCount) {
+        return [...prev.slice(prev.length - maxCount + 1), msg];
+      }
+      return [...prev, msg];
+    });
+  };
+
   const saveIdentity = (newName: string, newAvatarId: number) => {
     setUsername(newName);
     setAvatarId(newAvatarId);
     localStorage.setItem('backtrack_username', newName);
     localStorage.setItem('backtrack_avatar_id', newAvatarId.toString());
     setIsIdentifyOpen(false);
-    setMessages((prev) => [
-      ...prev,
-      `*** OPERATOR CALLSIGN SET: ${newName} (AVATAR #${newAvatarId}) ***`,
-      "READY TO CONNECT. CLICK [▶] CONNECT TCP TO LINK WITH SERVER.",
-    ]);
+    appendMessage(`*** OPERATOR CALLSIGN SET: ${newName} (AVATAR #${newAvatarId}) ***`);
+    appendMessage("READY TO CONNECT. CLICK [▶] CONNECT TCP TO LINK WITH SERVER.");
   };
 
   useEffect(() => {
@@ -62,23 +69,20 @@ export default function App() {
 
     // 2. System and protocol logs
     const unsubLog = EventsOn('log_message', (logMsg: string) => {
-      setMessages((prev) => [...prev, logMsg]);
+      appendMessage(logMsg);
     });
 
     // 3. Incoming TCP chat message listener with avatar metadata
     const unsubChat = EventsOn(
       'chat_message',
       (data: { userId: number; username: string; avatarId: number; body: string; time: string }) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            text: data.body,
-            username: data.username,
-            avatarId: data.avatarId,
-            time: data.time,
-            userId: data.userId,
-          },
-        ]);
+        appendMessage({
+          text: data.body,
+          username: data.username,
+          avatarId: data.avatarId,
+          time: data.time,
+          id: data.userId,
+        });
       }
     );
 
@@ -143,43 +147,34 @@ export default function App() {
   const handleConnectToggle = async () => {
     if (isOnline) {
       await Disconnect();
-      setMessages((prev) => [...prev, '*** DISCONNECTED FROM SERVER ***']);
+      appendMessage('*** DISCONNECTED FROM SERVER ***');
       return;
     }
 
     if (!username.trim()) {
       setIsIdentifyOpen(true);
-      setMessages((prev) => [
-        ...prev,
-        '!!! IDENTIFICATION REQUIRED: SET USERNAME BEFORE CONNECTING !!!',
-      ]);
+      appendMessage('!!! IDENTIFICATION REQUIRED: SET USERNAME BEFORE CONNECTING !!!');
       return;
     }
 
-    setMessages((prev) => [
-      ...prev,
-      `*** DIALING TCP ${serverAddr} AS ${username} (AVATAR #${avatarId})... ***`,
-    ]);
+    appendMessage(`*** DIALING TCP ${serverAddr} AS ${username} (AVATAR #${avatarId})... ***`);
     try {
       await Connect(serverAddr, username, avatarId);
     } catch (err: any) {
-      setMessages((prev) => [...prev, `!!! CONNECTION FAILED: ${err} !!!`]);
+      appendMessage(`!!! CONNECTION FAILED: ${err} !!!`);
     }
   };
 
   const handleSendMessage = async (text: string) => {
     if (!isOnline) {
-      setMessages((prev) => [
-        ...prev,
-        '!!! CANNOT TRANSMIT: NOT CONNECTED TO TCP SERVER. CLICK [▶] CONNECT TCP FIRST !!!',
-      ]);
+      appendMessage('!!! CANNOT TRANSMIT: NOT CONNECTED TO TCP SERVER. CLICK [▶] CONNECT TCP FIRST !!!');
       return;
     }
 
     try {
       await SendMessage(text);
     } catch (err: any) {
-      setMessages((prev) => [...prev, `!!! TRANSMISSION ERROR: ${err} !!!`]);
+      appendMessage(`!!! TRANSMISSION ERROR: ${err} !!!`);
     }
   };
 
@@ -190,18 +185,15 @@ export default function App() {
       if (clean && !rooms.includes(clean)) {
         setRooms((prev) => [...prev, clean]);
         setActiveRoom(clean);
-        setMessages((prev) => [
-          ...prev,
-          `*** CHANNEL CREATED: #${clean} ***`,
-          `*** SWITCHED CONTEXT TO #${clean} ***`,
-        ]);
+        appendMessage(`*** CHANNEL CREATED: #${clean} ***`);
+        appendMessage(`*** SWITCHED CONTEXT TO #${clean} ***`);
       }
     }
   };
 
   const handleSelectRoom = (room: string) => {
     setActiveRoom(room);
-    setMessages((prev) => [...prev, `*** SWITCHED TO CHANNEL: #${room} ***`]);
+    appendMessage(`*** SWITCHED TO CHANNEL: #${room} ***`);
   };
 
   return (

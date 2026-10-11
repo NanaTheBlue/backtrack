@@ -35,6 +35,10 @@ export default function IdentifyModal({
       setError('ERROR: MAXIMUM 24 CHARACTERS');
       return;
     }
+    if (!/^[A-Z0-9_.-]+$/.test(clean)) {
+      setError('ERROR: ALLOWED CHARACTERS: LETTERS, NUMBERS, -, _, .');
+      return;
+    }
     setError('');
     onSave(clean, selectedAvatarId);
   };

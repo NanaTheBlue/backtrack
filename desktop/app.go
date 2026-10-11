@@ -24,6 +24,7 @@ type App struct {
 	ctx         context.Context
 	conn        net.Conn
 	mu          sync.Mutex
+	writeMu     sync.Mutex // protects concurrent socket writes to conn
 	isConnected bool
 	username    string
 	avatarID    uint16
@@ -50,6 +51,23 @@ func (a *App) GetMemoryUsage() string {
 	return fmt.Sprintf("%.1f MB", float64(m.Alloc)/(1024*1024))
 }
 
+// writeMessage safely writes a framed protocol message to the active connection
+func (a *App) writeMessage(msgType byte, payload []byte) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+
+	a.mu.Lock()
+	conn := a.conn
+	connected := a.isConnected
+	a.mu.Unlock()
+
+	if !connected || conn == nil {
+		return fmt.Errorf("not connected to server")
+	}
+
+	return protocol.WriteMessage(conn, msgType, payload)
+}
+
 // Connect establishes a TCP connection to the Backtrack server and identifies with username & avatarID
 func (a *App) Connect(addr string, username string, avatarID uint16) error {
 	a.mu.Lock()
@@ -71,7 +89,10 @@ func (a *App) Connect(addr string, username string, avatarID uint16) error {
 		return fmt.Errorf("identify encoding failed: %w", err)
 	}
 
-	if err := protocol.WriteMessage(conn, protocol.MsgIdentify, identifyPayload); err != nil {
+	a.writeMu.Lock()
+	err = protocol.WriteMessage(conn, protocol.MsgIdentify, identifyPayload)
+	a.writeMu.Unlock()
+	if err != nil {
 		conn.Close()
 		return fmt.Errorf("identify send failed: %w", err)
 	}
@@ -98,27 +119,14 @@ func (a *App) Connect(addr string, username string, avatarID uint16) error {
 	return nil
 }
 
-// SendMessage sends a chat message to the server
+// SendMessage sends a chat message to the server safely using the write mutex
 func (a *App) SendMessage(body string) error {
-	a.mu.Lock()
-	conn := a.conn
-	connected := a.isConnected
-	a.mu.Unlock()
-
-	if !connected || conn == nil {
-		return fmt.Errorf("not connected to server")
-	}
-
 	payload, err := protocol.EncodeChatSend(body)
 	if err != nil {
 		return err
 	}
 
-	if err := protocol.WriteMessage(conn, protocol.MsgChatSend, payload); err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
-	}
-
-	return nil
+	return a.writeMessage(protocol.MsgChatSend, payload)
 }
 
 // Disconnect closes the active connection
@@ -150,11 +158,18 @@ func (a *App) IsConnected() bool {
 func (a *App) readLoop(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	defer func() {
-		a.Disconnect()
+		// Only trigger Disconnect if this connection is still the active one (avoids zombie disconnect race)
+		a.mu.Lock()
+		isCurrent := (a.conn == conn)
+		a.mu.Unlock()
+
+		if isCurrent {
+			a.Disconnect()
+		}
 	}()
 
 	for {
-		msg, err := protocol.ReadMessage(reader)
+		msg, err := protocol.ReadMessageWithLimit(reader, protocol.MaxPayloadSize)
 		if err != nil {
 			if a.ctx != nil {
 				runtime.EventsEmit(a.ctx, "log_message", fmt.Sprintf("*** DISCONNECTED FROM SERVER: %v ***", err))
@@ -164,8 +179,8 @@ func (a *App) readLoop(conn net.Conn) {
 
 		switch msg.Type {
 		case protocol.MsgPing:
-			// Automatically reply with Pong to maintain keepalive
-			_ = protocol.WriteMessage(conn, protocol.MsgPong, nil)
+			// Automatically reply with Pong safely using writeMessage
+			_ = a.writeMessage(protocol.MsgPong, nil)
 
 		case protocol.MsgWelcome:
 			uid, err := protocol.ParseWelcome(msg.Payload)

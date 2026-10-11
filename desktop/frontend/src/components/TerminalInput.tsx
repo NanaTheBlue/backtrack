@@ -27,6 +27,7 @@ export default function TerminalInput({ username, onSendMessage }: TerminalInput
           onChange={(e) => setInputVal(e.target.value)}
           placeholder="Type command or message..."
           autoFocus
+          maxLength={4000}
           className="flex-1 bg-transparent border-none outline-none text-green-200 placeholder-green-600/70 font-mono tracking-wider"
         />
         <button
