@@ -7,7 +7,7 @@ import TerminalInput from './components/TerminalInput';
 import SettingsModal from './components/SettingsModal';
 import IdentifyModal from './components/IdentifyModal';
 import { Connect, Disconnect, SendMessage, IsConnected, GetMemoryUsage, JoinRoom } from '../wailsjs/go/main/App';
-import { EventsOn } from '../wailsjs/runtime/runtime';
+import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime';
 
 interface Peer {
   userId: number;
@@ -15,13 +15,19 @@ interface Peer {
   avatarId?: number;
 }
 
+const MAX_MESSAGES_PER_ROOM = 250;
+let msgSequence = 0;
+const nextMsgId = () => `bt-${Date.now()}-${++msgSequence}`;
+
 export default function App() {
   const [rooms, setRooms] = useState<string[]>(['GLOBAL']);
   const [activeRoom, setActiveRoom] = useState<string>('GLOBAL');
-  const [messages, setMessages] = useState<(string | DisplayMessage)[]>([
-    "*** BACKTRACK TCP WORKSTATION v1.4 ***",
-    "READY.",
-  ]);
+  const [roomMessages, setRoomMessages] = useState<Record<string, DisplayMessage[]>>({
+    GLOBAL: [
+      { id: nextMsgId(), text: "*** BACKTRACK TCP WORKSTATION v1.4 ***", isSystem: true, room: 'GLOBAL' },
+      { id: nextMsgId(), text: "READY.", isSystem: true, room: 'GLOBAL' },
+    ],
+  });
   const [username, setUsername] = useState<string>(() => {
     return localStorage.getItem('backtrack_username') || '';
   });
@@ -40,13 +46,30 @@ export default function App() {
   const [serverAddr, setServerAddr] = useState<string>("localhost:9000");
   const [ramUsage, setRamUsage] = useState<string>("");
 
-  const appendMessage = (msg: string | DisplayMessage) => {
-    setMessages((prev) => {
-      const maxCount = 500;
-      if (prev.length >= maxCount) {
-        return [...prev.slice(prev.length - maxCount + 1), msg];
-      }
-      return [...prev, msg];
+  const appendMessage = (msg: string | DisplayMessage, explicitRoom?: string) => {
+    setRoomMessages((prev) => {
+      const targetRoom = (
+        explicitRoom ||
+        (typeof msg !== 'string' && msg.room) ||
+        activeRoom ||
+        'GLOBAL'
+      ).toUpperCase();
+
+      const item: DisplayMessage =
+        typeof msg === 'string'
+          ? { id: nextMsgId(), text: msg, isSystem: true, room: targetRoom }
+          : { ...msg, id: msg.id || nextMsgId(), room: targetRoom };
+
+      const existing = prev[targetRoom] || [];
+      const updated =
+        existing.length >= MAX_MESSAGES_PER_ROOM
+          ? [...existing.slice(existing.length - MAX_MESSAGES_PER_ROOM + 1), item]
+          : [...existing, item];
+
+      return {
+        ...prev,
+        [targetRoom]: updated,
+      };
     });
   };
 
@@ -66,6 +89,7 @@ export default function App() {
       setIsOnline(data.connected);
       if (!data.connected) {
         setPeers([]);
+        setRooms(['GLOBAL']);
       }
     });
 
@@ -185,6 +209,16 @@ export default function App() {
       unsubRoomJoined?.();
       unsubRoomLeft?.();
       unsubRateLimited?.();
+      EventsOff('status_change');
+      EventsOff('log_message');
+      EventsOff('chat_message');
+      EventsOff('user_info');
+      EventsOff('user_joined');
+      EventsOff('user_left');
+      EventsOff('room_list');
+      EventsOff('room_joined');
+      EventsOff('room_left');
+      EventsOff('rate_limited');
     };
   }, []);
 
@@ -270,11 +304,8 @@ export default function App() {
     appendMessage(`*** SWITCHED TO CHANNEL: #${room} ***`);
   };
 
-  // Filter messages displayed on the CRT screen for the active channel
-  const visibleMessages = messages.filter((item) => {
-    if (typeof item === 'string') return true;
-    return (item.room || 'GLOBAL').toUpperCase() === activeRoom.toUpperCase();
-  });
+  // Messages displayed on the CRT screen for the active channel (O(1) lookup)
+  const visibleMessages = roomMessages[activeRoom.toUpperCase()] || [];
 
   return (
     <div className="relative h-screen w-screen bg-[#020603] text-green-300 font-mono flex flex-col p-4 select-none overflow-hidden text-glow">
