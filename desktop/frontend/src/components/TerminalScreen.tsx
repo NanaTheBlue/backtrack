@@ -8,6 +8,7 @@ export interface DisplayMessage {
   username?: string;
   avatarId?: number;
   time?: string;
+  room?: string;
 }
 
 interface TerminalScreenProps {

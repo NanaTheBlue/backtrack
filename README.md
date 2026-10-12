@@ -10,7 +10,7 @@ Older consoles have limited memory and CPU. Parsing JSON in C requires a library
 
 ## Architecture
 
-- **One global chat room** — all connected users see all messages.
+- **Room & Channel Routing** — users can join multiple channels; messages are routed exclusively to subscribers in that room, with `#GLOBAL` as the primary lobby.
 - **Hub-based Event Loop** — all chat state and routing is managed by a central lock-free `Hub` (`server/hub.go`) that processes events sequentially via channels, preventing race conditions without needing mutexes.
 - **Per-user Goroutines** — each connection gets a goroutine for reading incoming TCP frames and a dedicated `writeLoop` for sending them.
 - **Non-blocking broadcasts** — a slow client gets disconnected instead of freezing the Hub or other users.
@@ -27,23 +27,26 @@ Every message follows this
 ### Client → Server
 
 | Type | Name | Payload |
-
 | `0x01` | Identify | `username_len(1) + username + avatar_id(2)` |
-| `0x02` | Chat Send | `body_len(2) + body` |
+| `0x02` | Chat Send | `room_len(1) + room + body_len(2) + body` |
 | `0x03` | Set Presence | `status(1)` |
 | `0x04` | Pong | *(no payload)* |
+| `0x05` | Join Room | `room_len(1) + room` |
+| `0x06` | Leave Room | `room_len(1) + room` |
 
 ### Server → Client
 
 | Type | Name | Payload |
-
 | `0x80` | Welcome | `user_id(4)` |
-| `0x81` | Chat Recv | `user_id(4) + body_len(2) + body` |
+| `0x81` | Chat Recv | `user_id(4) + room_len(1) + room + body_len(2) + body` |
 | `0x82` | User Joined | `user_id(4) + avatar_id(2) + username_len(1) + username` |
 | `0x83` | User Left | `user_id(4)` |
 | `0x84` | User Info | `user_id(4) + avatar_id(2) + status(1) + username_len(1) + username` |
 | `0x85` | Presence Update | `user_id(4) + status(1)` |
 | `0x86` | Ping | *(no payload)* |
+| `0x87` | Room Joined | `user_id(4) + room_len(1) + room` |
+| `0x88` | Room Left | `user_id(4) + room_len(1) + room` |
+| `0x89` | Room List | `room_count(2) + [room_len(1) + room]...` |
 | `0xFF` | Error | `msg_len(2) + msg` |
 
 ### Presence Statuses
@@ -71,6 +74,9 @@ backtrack/
 ├── server/
 │   ├── server.go           # Chat server — TCP connections & lifecycle
 │   └── hub.go              # Lock-free event router for chat state
+├── test/
+│   ├── unit/               # Blazing-fast (<50ms) in-memory unit tests (framing, codecs, hub)
+│   └── integration/        # Real TCP integration & edge case tests (handshakes, slow clients, routing)
 └── go.mod
 ```
 
@@ -104,7 +110,8 @@ wails build
 ## Roadmap
 
 - [ ] Console clients (C — PSP, Wii, DS, etc.)
-- [ ] Channels / rooms
+- [x] Channels / rooms
 - [ ] Message history / persistence
 - [ ] User authentication
-- [ ] Tests
+- [x] Tests
+

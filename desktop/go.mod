@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/nanatheblue/backtrack v0.0.0-00010101000000-000000000000
 	github.com/wailsapp/wails/v2 v2.16.0
+	golang.org/x/sys v0.46.0
 )
 
 replace github.com/nanatheblue/backtrack => ../
@@ -36,7 +37,6 @@ require (
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 )
 

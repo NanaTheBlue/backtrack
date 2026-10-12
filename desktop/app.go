@@ -124,14 +124,35 @@ func (a *App) Connect(addr string, username string, avatarID uint16) error {
 	return nil
 }
 
-// SendMessage sends a chat message to the server safely using the write mutex
-func (a *App) SendMessage(body string) error {
-	payload, err := protocol.EncodeChatSend(body)
+// SendMessage sends a chat message to a specific room safely using the write mutex
+func (a *App) SendMessage(room string, body string) error {
+	if room == "" {
+		room = protocol.DefaultRoom
+	}
+	payload, err := protocol.EncodeChatSend(room, body)
 	if err != nil {
 		return err
 	}
 
 	return a.writeMessage(protocol.MsgChatSend, payload)
+}
+
+// JoinRoom sends a request to join a channel
+func (a *App) JoinRoom(room string) error {
+	payload, err := protocol.EncodeJoinRoom(room)
+	if err != nil {
+		return err
+	}
+	return a.writeMessage(protocol.MsgJoinRoom, payload)
+}
+
+// LeaveRoom sends a request to leave a channel
+func (a *App) LeaveRoom(room string) error {
+	payload, err := protocol.EncodeLeaveRoom(room)
+	if err != nil {
+		return err
+	}
+	return a.writeMessage(protocol.MsgLeaveRoom, payload)
 }
 
 // Disconnect closes the active connection
@@ -247,7 +268,7 @@ func (a *App) readLoop(conn net.Conn) {
 			}
 
 		case protocol.MsgChatRecv:
-			uid, body, err := protocol.ParseChatRecv(msg.Payload)
+			uid, room, body, err := protocol.ParseChatRecv(msg.Payload)
 			if err == nil {
 				a.mu.Lock()
 				sender := a.users[uid]
@@ -264,8 +285,49 @@ func (a *App) readLoop(conn net.Conn) {
 					"userId":   uid,
 					"username": sender.Username,
 					"avatarId": sender.AvatarID,
+					"room":     room,
 					"body":     body,
 					"time":     time.Now().Format("15:04:05"),
+				})
+			}
+
+		case protocol.MsgRoomList:
+			rooms, err := protocol.ParseRoomList(msg.Payload)
+			if err == nil {
+				runtime.EventsEmit(a.ctx, "room_list", rooms)
+			}
+
+		case protocol.MsgRoomJoined:
+			uid, room, err := protocol.ParseRoomJoined(msg.Payload)
+			if err == nil {
+				a.mu.Lock()
+				sender := a.users[uid]
+				a.mu.Unlock()
+				name := sender.Username
+				if name == "" {
+					name = fmt.Sprintf("USER #%d", uid)
+				}
+				runtime.EventsEmit(a.ctx, "room_joined", map[string]interface{}{
+					"userId":   uid,
+					"username": name,
+					"room":     room,
+				})
+			}
+
+		case protocol.MsgRoomLeft:
+			uid, room, err := protocol.ParseRoomLeft(msg.Payload)
+			if err == nil {
+				a.mu.Lock()
+				sender := a.users[uid]
+				a.mu.Unlock()
+				name := sender.Username
+				if name == "" {
+					name = fmt.Sprintf("USER #%d", uid)
+				}
+				runtime.EventsEmit(a.ctx, "room_left", map[string]interface{}{
+					"userId":   uid,
+					"username": name,
+					"room":     room,
 				})
 			}
 

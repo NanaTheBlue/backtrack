@@ -6,7 +6,7 @@ import TerminalScreen, { DisplayMessage } from './components/TerminalScreen';
 import TerminalInput from './components/TerminalInput';
 import SettingsModal from './components/SettingsModal';
 import IdentifyModal from './components/IdentifyModal';
-import { Connect, Disconnect, SendMessage, IsConnected, GetMemoryUsage } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, SendMessage, IsConnected, GetMemoryUsage, JoinRoom } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 interface Peer {
@@ -19,7 +19,7 @@ export default function App() {
   const [rooms, setRooms] = useState<string[]>(['GLOBAL']);
   const [activeRoom, setActiveRoom] = useState<string>('GLOBAL');
   const [messages, setMessages] = useState<(string | DisplayMessage)[]>([
-    "*** BACKTRACK TCP WORKSTATION v1.2 ***",
+    "*** BACKTRACK TCP WORKSTATION v1.4 ***",
     "READY.",
   ]);
   const [username, setUsername] = useState<string>(() => {
@@ -74,16 +74,17 @@ export default function App() {
       appendMessage(logMsg);
     });
 
-    // 3. Incoming TCP chat message listener with avatar metadata
+    // 3. Incoming TCP chat message listener with room and avatar metadata
     const unsubChat = EventsOn(
       'chat_message',
-      (data: { userId: number; username: string; avatarId: number; body: string; time: string }) => {
+      (data: { userId: number; username: string; avatarId: number; room: string; body: string; time: string }) => {
         appendMessage({
           text: data.body,
           username: data.username,
           avatarId: data.avatarId,
           time: data.time,
           id: data.userId,
+          room: data.room || 'GLOBAL',
         });
       }
     );
@@ -119,7 +120,33 @@ export default function App() {
       setPeers((prev) => prev.filter((p) => p.userId !== data.userId));
     });
 
-    // 5. Rate limit warning listener
+    // 5. Active Room Directory listener from server
+    const unsubRoomList = EventsOn('room_list', (serverRooms: string[]) => {
+      if (Array.isArray(serverRooms)) {
+        setRooms((prev) => {
+          const combined = ['GLOBAL', ...serverRooms.filter((r) => r !== 'GLOBAL')];
+          return Array.from(new Set([...combined, ...prev]));
+        });
+      }
+    });
+
+    const unsubRoomJoined = EventsOn('room_joined', (data: { userId: number; username: string; room: string }) => {
+      appendMessage({
+        isSystem: true,
+        text: `*** ${data.username} JOINED CHANNEL #${data.room} ***`,
+        room: data.room,
+      });
+    });
+
+    const unsubRoomLeft = EventsOn('room_left', (data: { userId: number; username: string; room: string }) => {
+      appendMessage({
+        isSystem: true,
+        text: `*** ${data.username} LEFT CHANNEL #${data.room} ***`,
+        room: data.room,
+      });
+    });
+
+    // 6. Rate limit warning listener
     const unsubRateLimited = EventsOn('rate_limited', (data: { message: string }) => {
       setIsRateLimited(true);
       appendMessage(`*** [⚠ THROTTLED] ${data.message.toUpperCase()} — PAUSING TRANSMISSION ***`);
@@ -154,6 +181,9 @@ export default function App() {
       unsubUserInfo?.();
       unsubUserJoined?.();
       unsubUserLeft?.();
+      unsubRoomList?.();
+      unsubRoomJoined?.();
+      unsubRoomLeft?.();
       unsubRateLimited?.();
     };
   }, []);
@@ -174,6 +204,9 @@ export default function App() {
     appendMessage(`*** DIALING TCP ${serverAddr} AS ${username} (AVATAR #${avatarId})... ***`);
     try {
       await Connect(serverAddr, username, avatarId);
+      if (activeRoom !== 'GLOBAL') {
+        await JoinRoom(activeRoom).catch(() => {});
+      }
     } catch (err: any) {
       appendMessage(`!!! CONNECTION FAILED: ${err} !!!`);
     }
@@ -190,30 +223,58 @@ export default function App() {
       return;
     }
 
+    const byteLen = new TextEncoder().encode(text).length;
+    if (byteLen > 512) {
+      appendMessage(`!!! TRANSMISSION BLOCKED: MESSAGE EXCEEDS 512-BYTE LIMIT (${byteLen} BYTES) — PLEASE TRIM TEXT !!!`);
+      return;
+    }
+
     try {
-      await SendMessage(text);
+      await SendMessage(activeRoom, text);
     } catch (err: any) {
       appendMessage(`!!! TRANSMISSION ERROR: ${err} !!!`);
     }
   };
 
-  const handleCreateRoom = () => {
+  const handleCreateRoom = async () => {
     const roomName = prompt("ENTER NEW CHANNEL NAME (E.G. 'TEST-ROOM'):");
     if (roomName && roomName.trim()) {
       const clean = roomName.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
-      if (clean && !rooms.includes(clean)) {
-        setRooms((prev) => [...prev, clean]);
+      if (clean) {
+        if (!rooms.includes(clean)) {
+          setRooms((prev) => [...prev, clean]);
+        }
         setActiveRoom(clean);
+        if (isOnline) {
+          try {
+            await JoinRoom(clean);
+          } catch (err) {
+            console.error("JoinRoom failed:", err);
+          }
+        }
         appendMessage(`*** CHANNEL CREATED: #${clean} ***`);
         appendMessage(`*** SWITCHED CONTEXT TO #${clean} ***`);
       }
     }
   };
 
-  const handleSelectRoom = (room: string) => {
+  const handleSelectRoom = async (room: string) => {
     setActiveRoom(room);
+    if (isOnline) {
+      try {
+        await JoinRoom(room);
+      } catch (err) {
+        console.error("JoinRoom failed:", err);
+      }
+    }
     appendMessage(`*** SWITCHED TO CHANNEL: #${room} ***`);
   };
+
+  // Filter messages displayed on the CRT screen for the active channel
+  const visibleMessages = messages.filter((item) => {
+    if (typeof item === 'string') return true;
+    return (item.room || 'GLOBAL').toUpperCase() === activeRoom.toUpperCase();
+  });
 
   return (
     <div className="relative h-screen w-screen bg-[#020603] text-green-300 font-mono flex flex-col p-4 select-none overflow-hidden text-glow">
@@ -244,7 +305,7 @@ export default function App() {
         />
 
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-          <TerminalScreen messages={messages} activeRoom={activeRoom} />
+          <TerminalScreen messages={visibleMessages} activeRoom={activeRoom} />
           <TerminalInput
             username={username || 'GUEST'}
             onSendMessage={handleSendMessage}

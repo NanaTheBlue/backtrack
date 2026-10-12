@@ -18,6 +18,14 @@ export function IsConnected() {
   return window['go']['main']['App']['IsConnected']();
 }
 
-export function SendMessage(arg1) {
-  return window['go']['main']['App']['SendMessage'](arg1);
+export function JoinRoom(arg1) {
+  return window['go']['main']['App']['JoinRoom'](arg1);
+}
+
+export function LeaveRoom(arg1) {
+  return window['go']['main']['App']['LeaveRoom'](arg1);
+}
+
+export function SendMessage(arg1, arg2) {
+  return window['go']['main']['App']['SendMessage'](arg1, arg2);
 }

@@ -17,16 +17,60 @@ func WelcomePayload(userID uint32) []byte {
 	return buf
 }
 
-// ChatRecvPayload builds the payload for MsgChatRecv.
-func ChatRecvPayload(userID uint32, body string) []byte {
+// ChatRecvPayload builds the payload for MsgChatRecv (user_id(4) + room_len(1) + room + body_len(2) + body).
+func ChatRecvPayload(userID uint32, room string, body string) []byte {
+	if room == "" {
+		room = DefaultRoom
+	}
 	b := []byte(body)
 	if len(b) > MaxChatBodyLen {
 		b = b[:MaxChatBodyLen]
 	}
-	buf := make([]byte, 4+2+len(b))
+	r := []byte(room)
+	buf := make([]byte, 4+1+len(r)+2+len(b))
 	binary.BigEndian.PutUint32(buf[0:4], userID)
-	binary.BigEndian.PutUint16(buf[4:6], uint16(len(b)))
-	copy(buf[6:], b)
+	buf[4] = byte(len(r))
+	copy(buf[5:], r)
+	binary.BigEndian.PutUint16(buf[5+len(r):], uint16(len(b)))
+	copy(buf[5+len(r)+2:], b)
+	return buf
+}
+
+// RoomJoinedPayload builds the payload for MsgRoomJoined (user_id(4) + room_len(1) + room).
+func RoomJoinedPayload(userID uint32, room string) []byte {
+	r := []byte(room)
+	buf := make([]byte, 4+1+len(r))
+	binary.BigEndian.PutUint32(buf[0:4], userID)
+	buf[4] = byte(len(r))
+	copy(buf[5:], r)
+	return buf
+}
+
+// RoomLeftPayload builds the payload for MsgRoomLeft (user_id(4) + room_len(1) + room).
+func RoomLeftPayload(userID uint32, room string) []byte {
+	r := []byte(room)
+	buf := make([]byte, 4+1+len(r))
+	binary.BigEndian.PutUint32(buf[0:4], userID)
+	buf[4] = byte(len(r))
+	copy(buf[5:], r)
+	return buf
+}
+
+// RoomListPayload builds the payload for MsgRoomList (room_count(2) + [room_len(1) + room]...).
+func RoomListPayload(rooms []string) []byte {
+	totalLen := 2
+	for _, r := range rooms {
+		totalLen += 1 + len(r)
+	}
+	buf := make([]byte, totalLen)
+	binary.BigEndian.PutUint16(buf[0:2], uint16(len(rooms)))
+	offset := 2
+	for _, r := range rooms {
+		rb := []byte(r)
+		buf[offset] = byte(len(rb))
+		copy(buf[offset+1:], rb)
+		offset += 1 + len(rb)
+	}
 	return buf
 }
 
@@ -87,18 +131,23 @@ func ParseWelcome(payload []byte) (userID uint32, err error) {
 	return binary.BigEndian.Uint32(payload[:4]), nil
 }
 
-// ParseChatRecv parses a MsgChatRecv payload.
-func ParseChatRecv(payload []byte) (userID uint32, body string, err error) {
-	if len(payload) < 6 {
-		return 0, "", fmt.Errorf("chat recv payload too short")
+// ParseChatRecv parses a MsgChatRecv payload (user_id(4) + room_len(1) + room + body_len(2) + body).
+func ParseChatRecv(payload []byte) (userID uint32, room string, body string, err error) {
+	if len(payload) < 7 {
+		return 0, "", "", fmt.Errorf("chat recv payload too short")
 	}
 	userID = binary.BigEndian.Uint32(payload[0:4])
-	bodyLen := binary.BigEndian.Uint16(payload[4:6])
-	if len(payload) < 6+int(bodyLen) {
-		return 0, "", fmt.Errorf("chat recv payload truncated")
+	roomLen := int(payload[4])
+	if len(payload) < 4+1+roomLen+2 {
+		return 0, "", "", fmt.Errorf("chat recv payload truncated")
 	}
-	body = string(payload[6 : 6+bodyLen])
-	return userID, body, nil
+	room = string(payload[5 : 5+roomLen])
+	bodyLen := binary.BigEndian.Uint16(payload[5+roomLen : 5+roomLen+2])
+	if len(payload) < 5+roomLen+2+int(bodyLen) {
+		return 0, "", "", fmt.Errorf("chat recv payload truncated")
+	}
+	body = string(payload[5+roomLen+2 : 5+roomLen+2+int(bodyLen)])
+	return userID, room, body, nil
 }
 
 // ParseUserJoined parses a MsgUserJoined payload.
@@ -158,4 +207,60 @@ func ParseServerError(payload []byte) (msg string, err error) {
 		return "", fmt.Errorf("server error payload truncated")
 	}
 	return string(payload[2 : 2+msgLen]), nil
+}
+
+// ParseRoomJoined parses a MsgRoomJoined payload.
+func ParseRoomJoined(payload []byte) (userID uint32, room string, err error) {
+	if len(payload) < 5 {
+		return 0, "", fmt.Errorf("room joined payload too short")
+	}
+	userID = binary.BigEndian.Uint32(payload[0:4])
+	roomLen := int(payload[4])
+	if len(payload) < 5+roomLen {
+		return 0, "", fmt.Errorf("room joined payload truncated")
+	}
+	room = string(payload[5 : 5+roomLen])
+	return userID, room, nil
+}
+
+// ParseRoomLeft parses a MsgRoomLeft payload.
+func ParseRoomLeft(payload []byte) (userID uint32, room string, err error) {
+	if len(payload) < 5 {
+		return 0, "", fmt.Errorf("room left payload too short")
+	}
+	userID = binary.BigEndian.Uint32(payload[0:4])
+	roomLen := int(payload[4])
+	if len(payload) < 5+roomLen {
+		return 0, "", fmt.Errorf("room left payload truncated")
+	}
+	room = string(payload[5 : 5+roomLen])
+	return userID, room, nil
+}
+
+// ParseRoomList parses a MsgRoomList payload.
+func ParseRoomList(payload []byte) ([]string, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("room list payload too short")
+	}
+	count := int(binary.BigEndian.Uint16(payload[0:2]))
+	// Each room requires at least 1 byte for length prefix. Reject impossible counts.
+	maxPossible := len(payload) - 2
+	if count > maxPossible {
+		return nil, fmt.Errorf("room list count %d exceeds payload capacity (%d max)", count, maxPossible)
+	}
+	rooms := make([]string, 0, count)
+	offset := 2
+	for i := 0; i < count; i++ {
+		if offset >= len(payload) {
+			return nil, fmt.Errorf("room list payload truncated")
+		}
+		rLen := int(payload[offset])
+		offset++
+		if offset+rLen > len(payload) {
+			return nil, fmt.Errorf("room list payload truncated")
+		}
+		rooms = append(rooms, string(payload[offset:offset+rLen]))
+		offset += rLen
+	}
+	return rooms, nil
 }

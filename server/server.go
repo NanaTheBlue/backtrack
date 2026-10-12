@@ -87,6 +87,42 @@ func (u *User) close() {
 	})
 }
 
+// Close terminates the user connection. Safe to call multiple times.
+func (u *User) Close() {
+	u.close()
+}
+
+// AllowMessage checks if the user is within their chat rate limit.
+func (u *User) AllowMessage() bool {
+	return u.allowMessage()
+}
+
+// SetTokensForTest manually adjusts token count for unit testing without clock sleep.
+func (u *User) SetTokensForTest(tokens float64) {
+	u.rateMu.Lock()
+	defer u.rateMu.Unlock()
+	u.tokens = tokens
+	u.lastRefill = time.Now()
+}
+
+// NewTestUser constructs an in-memory User backed by a net.Pipe for unit testing.
+func NewTestUser(id uint32, username string, avatarID uint16) (*User, net.Conn) {
+	c1, c2 := net.Pipe()
+	u := &User{
+		ID:         id,
+		Username:   username,
+		AvatarID:   avatarID,
+		Status:     protocol.StatusOnline,
+		conn:       c1,
+		outbox:     make(chan outMsg, outboxSize),
+		quit:       make(chan struct{}),
+		tokens:     3.0,
+		lastRefill: time.Now(),
+	}
+	go u.writeLoop()
+	return u, c2
+}
+
 // writeLoop drains the outbox and writes to the connection.
 // It batches multiple queued messages into a single flush for efficiency.
 func (u *User) writeLoop() {
@@ -303,13 +339,32 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 			user.send(protocol.MsgServerError, protocol.ErrorPayload("rate limit exceeded: please slow down (max 1 msg/sec)"))
 			return
 		}
-		body, err := protocol.ParseChatSend(msg.Payload)
+		room, body, err := protocol.ParseChatSend(msg.Payload)
 		if err != nil {
 			slog.Warn("bad chat", "username", user.Username, "error", err)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
 			return
 		}
-		slog.Info("chat message", "username", user.Username, "message", body)
-		s.hub.Chat(user, body)
+		slog.Info("chat message", "username", user.Username, "room", room, "message", body)
+		s.hub.Chat(user, room, body)
+
+	case protocol.MsgJoinRoom:
+		room, err := protocol.ParseJoinRoom(msg.Payload)
+		if err != nil {
+			slog.Warn("bad join room", "username", user.Username, "error", err)
+			return
+		}
+		slog.Info("join room", "username", user.Username, "room", room)
+		s.hub.JoinRoom(user, room)
+
+	case protocol.MsgLeaveRoom:
+		room, err := protocol.ParseLeaveRoom(msg.Payload)
+		if err != nil {
+			slog.Warn("bad leave room", "username", user.Username, "error", err)
+			return
+		}
+		slog.Info("leave room", "username", user.Username, "room", room)
+		s.hub.LeaveRoom(user, room)
 
 	case protocol.MsgSetPresence:
 		status, err := protocol.ParseSetPresence(msg.Payload)

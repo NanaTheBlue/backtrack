@@ -9,14 +9,20 @@ import (
 // Identify, ChatSend, SetPresence, Pong.
 
 const (
-	// MaxChatBodyLen is the maximum allowed size of a chat message body (4 KB).
-	MaxChatBodyLen = 4096
+	// MaxChatBodyLen is the maximum allowed size of a chat message body (512 bytes, matching IRC standard).
+	MaxChatBodyLen = 512
 
 	// MinUsernameLen is the minimum callsign length.
 	MinUsernameLen = 1
 
 	// MaxUsernameLen is the maximum callsign length.
 	MaxUsernameLen = 24
+
+	// MinRoomLen is the minimum room name length.
+	MinRoomLen = 1
+
+	// MaxRoomLen is the maximum room name length.
+	MaxRoomLen = 24
 )
 
 // ValidateUsername checks that a callsign is non-empty, within length limits,
@@ -28,6 +34,20 @@ func ValidateUsername(name string) error {
 	for _, r := range name {
 		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' && r != '.' {
 			return fmt.Errorf("callsign contains invalid characters (allowed: letters, digits, '-', '_', '.')")
+		}
+	}
+	return nil
+}
+
+// ValidateRoomName checks that a room name is non-empty, within length limits,
+// and contains only printable safe characters (alphanumeric, -, _).
+func ValidateRoomName(name string) error {
+	if len(name) < MinRoomLen || len(name) > MaxRoomLen {
+		return fmt.Errorf("room name must be between %d and %d characters", MinRoomLen, MaxRoomLen)
+	}
+	for _, r := range name {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' {
+			return fmt.Errorf("room name contains invalid characters (allowed: letters, digits, '-', '_')")
 		}
 	}
 	return nil
@@ -48,15 +68,48 @@ func EncodeIdentify(username string, avatarID uint16) ([]byte, error) {
 	return payload, nil
 }
 
-// EncodeChatSend encodes a chat message payload (body_len(2) + body).
-func EncodeChatSend(body string) ([]byte, error) {
+// EncodeChatSend encodes a chat message payload (room_len(1) + room + body_len(2) + body).
+func EncodeChatSend(room string, body string) ([]byte, error) {
+	if room == "" {
+		room = DefaultRoom
+	}
+	if err := ValidateRoomName(room); err != nil {
+		return nil, err
+	}
 	b := []byte(body)
 	if len(b) > MaxChatBodyLen {
 		return nil, fmt.Errorf("message body too long: %d bytes (max %d)", len(b), MaxChatBodyLen)
 	}
-	payload := make([]byte, 2+len(b))
-	binary.BigEndian.PutUint16(payload[0:2], uint16(len(b)))
-	copy(payload[2:], b)
+	r := []byte(room)
+	payload := make([]byte, 1+len(r)+2+len(b))
+	payload[0] = byte(len(r))
+	copy(payload[1:], r)
+	binary.BigEndian.PutUint16(payload[1+len(r):], uint16(len(b)))
+	copy(payload[1+len(r)+2:], b)
+	return payload, nil
+}
+
+// EncodeJoinRoom encodes a join room payload (room_len(1) + room).
+func EncodeJoinRoom(room string) ([]byte, error) {
+	if err := ValidateRoomName(room); err != nil {
+		return nil, err
+	}
+	r := []byte(room)
+	payload := make([]byte, 1+len(r))
+	payload[0] = byte(len(r))
+	copy(payload[1:], r)
+	return payload, nil
+}
+
+// EncodeLeaveRoom encodes a leave room payload (room_len(1) + room).
+func EncodeLeaveRoom(room string) ([]byte, error) {
+	if err := ValidateRoomName(room); err != nil {
+		return nil, err
+	}
+	r := []byte(room)
+	payload := make([]byte, 1+len(r))
+	payload[0] = byte(len(r))
+	copy(payload[1:], r)
 	return payload, nil
 }
 
@@ -84,20 +137,60 @@ func ParseIdentify(payload []byte) (username string, avatarID uint16, err error)
 	return username, avatarID, nil
 }
 
-// ParseChatSend parses a MsgChatSend payload.
-func ParseChatSend(payload []byte) (body string, err error) {
-	if len(payload) < 2 {
-		return "", fmt.Errorf("chat send payload too short: %d bytes", len(payload))
+// ParseChatSend parses a MsgChatSend payload (room_len(1) + room + body_len(2) + body).
+func ParseChatSend(payload []byte) (room string, body string, err error) {
+	if len(payload) < 3 {
+		return "", "", fmt.Errorf("chat send payload too short: %d bytes", len(payload))
 	}
-	bodyLen := binary.BigEndian.Uint16(payload[0:2])
+	roomLen := int(payload[0])
+	if len(payload) < 1+roomLen+2 {
+		return "", "", fmt.Errorf("chat send payload truncated")
+	}
+	room = string(payload[1 : 1+roomLen])
+	if err := ValidateRoomName(room); err != nil {
+		return "", "", err
+	}
+	bodyLen := int(binary.BigEndian.Uint16(payload[1+roomLen : 1+roomLen+2]))
 	if bodyLen > MaxChatBodyLen {
-		return "", fmt.Errorf("chat message body exceeds limit: %d bytes (max %d)", bodyLen, MaxChatBodyLen)
+		return "", "", fmt.Errorf("chat message body exceeds limit: %d bytes (max %d)", bodyLen, MaxChatBodyLen)
 	}
-	if len(payload) < 2+int(bodyLen) {
-		return "", fmt.Errorf("chat send payload truncated")
+	if len(payload) < 1+roomLen+2+bodyLen {
+		return "", "", fmt.Errorf("chat send payload truncated")
 	}
-	body = string(payload[2 : 2+bodyLen])
-	return body, nil
+	body = string(payload[1+roomLen+2 : 1+roomLen+2+bodyLen])
+	return room, body, nil
+}
+
+// ParseJoinRoom parses a MsgJoinRoom payload.
+func ParseJoinRoom(payload []byte) (room string, err error) {
+	if len(payload) < 1 {
+		return "", fmt.Errorf("join room payload too short")
+	}
+	roomLen := int(payload[0])
+	if len(payload) < 1+roomLen {
+		return "", fmt.Errorf("join room payload truncated")
+	}
+	room = string(payload[1 : 1+roomLen])
+	if err := ValidateRoomName(room); err != nil {
+		return "", err
+	}
+	return room, nil
+}
+
+// ParseLeaveRoom parses a MsgLeaveRoom payload.
+func ParseLeaveRoom(payload []byte) (room string, err error) {
+	if len(payload) < 1 {
+		return "", fmt.Errorf("leave room payload too short")
+	}
+	roomLen := int(payload[0])
+	if len(payload) < 1+roomLen {
+		return "", fmt.Errorf("leave room payload truncated")
+	}
+	room = string(payload[1 : 1+roomLen])
+	if err := ValidateRoomName(room); err != nil {
+		return "", err
+	}
+	return room, nil
 }
 
 // ParseSetPresence parses a MsgSetPresence payload.

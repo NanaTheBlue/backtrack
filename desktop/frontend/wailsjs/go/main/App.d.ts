@@ -9,4 +9,8 @@ export function GetMemoryUsage():Promise<string>;
 
 export function IsConnected():Promise<boolean>;
 
-export function SendMessage(arg1:string):Promise<void>;
+export function JoinRoom(arg1:string):Promise<void>;
+
+export function LeaveRoom(arg1:string):Promise<void>;
+
+export function SendMessage(arg1:string,arg2:string):Promise<void>;
