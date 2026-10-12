@@ -165,6 +165,7 @@ func (a *App) Disconnect() {
 		a.conn = nil
 	}
 	a.isConnected = false
+	a.users = make(map[uint32]UserData)
 
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "status_change", map[string]interface{}{
