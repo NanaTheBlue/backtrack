@@ -21,6 +21,8 @@ const (
 	MsgPong        byte = 0x04 // (no payload — response to server ping)
 	MsgJoinRoom    byte = 0x05 // room_len(1) + room
 	MsgLeaveRoom   byte = 0x06 // room_len(1) + room
+	MsgChatEdit    byte = 0x07 // msg_id_len(1) + msg_id + room_len(1) + room + body_len(2) + body
+	MsgChatDelete  byte = 0x08 // msg_id_len(1) + msg_id + room_len(1) + room
 )
 
 // Server → Client
@@ -35,5 +37,7 @@ const (
 	MsgRoomJoined     byte = 0x87 // user_id(4) + room_len(1) + room
 	MsgRoomLeft       byte = 0x88 // user_id(4) + room_len(1) + room
 	MsgRoomList       byte = 0x89 // room_count(2) + [room_len(1) + room]...
+	MsgChatEdited     byte = 0x8A // msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room + body_len(2) + body
+	MsgChatDeleted    byte = 0x8B // msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room
 	MsgServerError    byte = 0xFF // msg_len(2) + msg
 )

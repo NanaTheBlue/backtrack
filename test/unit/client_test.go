@@ -228,3 +228,52 @@ func TestUnit_ReadMessageWithLimit(t *testing.T) {
 	}
 }
 
+func TestUnit_ChatEditAndDeletePayloads(t *testing.T) {
+	// 1. Client -> Server MsgChatEdit
+	editPayload, err := protocol.EncodeChatEdit("msg-42", "GLOBAL", "corrected message")
+	if err != nil {
+		t.Fatalf("EncodeChatEdit failed: %v", err)
+	}
+	mid, room, body, err := protocol.ParseChatEdit(editPayload)
+	if err != nil {
+		t.Fatalf("ParseChatEdit failed: %v", err)
+	}
+	if mid != "msg-42" || room != "GLOBAL" || body != "corrected message" {
+		t.Errorf("ParseChatEdit mismatch: id=%q, room=%q, body=%q", mid, room, body)
+	}
+
+	// 2. Client -> Server MsgChatDelete
+	delPayload, err := protocol.EncodeChatDelete("msg-99", "LOUNGE")
+	if err != nil {
+		t.Fatalf("EncodeChatDelete failed: %v", err)
+	}
+	mid, room, err = protocol.ParseChatDelete(delPayload)
+	if err != nil {
+		t.Fatalf("ParseChatDelete failed: %v", err)
+	}
+	if mid != "msg-99" || room != "LOUNGE" {
+		t.Errorf("ParseChatDelete mismatch: id=%q, room=%q", mid, room)
+	}
+
+	// 3. Server -> Client MsgChatEdited
+	srvEditPayload := protocol.ChatEditedPayload("msg-42", 101, "GLOBAL", "new content")
+	mid, uid, room, body, err := protocol.ParseChatEdited(srvEditPayload)
+	if err != nil {
+		t.Fatalf("ParseChatEdited failed: %v", err)
+	}
+	if mid != "msg-42" || uid != 101 || room != "GLOBAL" || body != "new content" {
+		t.Errorf("ParseChatEdited mismatch: id=%q, uid=%d, room=%q, body=%q", mid, uid, room, body)
+	}
+
+	// 4. Server -> Client MsgChatDeleted
+	srvDelPayload := protocol.ChatDeletedPayload("msg-99", 102, "LOUNGE")
+	mid, uid, room, err = protocol.ParseChatDeleted(srvDelPayload)
+	if err != nil {
+		t.Fatalf("ParseChatDeleted failed: %v", err)
+	}
+	if mid != "msg-99" || uid != 102 || room != "LOUNGE" {
+		t.Errorf("ParseChatDeleted mismatch: id=%q, uid=%d, room=%q", mid, uid, room)
+	}
+}
+
+

@@ -36,6 +36,51 @@ func ChatRecvPayload(userID uint32, room string, body string) []byte {
 	return buf
 }
 
+// ChatEditedPayload builds the payload for MsgChatEdited
+// (msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room + body_len(2) + body).
+func ChatEditedPayload(msgID string, userID uint32, room string, body string) []byte {
+	if room == "" {
+		room = DefaultRoom
+	}
+	mid := []byte(msgID)
+	r := []byte(room)
+	b := []byte(body)
+	if len(b) > MaxChatBodyLen {
+		b = b[:MaxChatBodyLen]
+	}
+	buf := make([]byte, 1+len(mid)+4+1+len(r)+2+len(b))
+	buf[0] = byte(len(mid))
+	copy(buf[1:], mid)
+	offset := 1 + len(mid)
+	binary.BigEndian.PutUint32(buf[offset:offset+4], userID)
+	offset += 4
+	buf[offset] = byte(len(r))
+	copy(buf[offset+1:], r)
+	offset += 1 + len(r)
+	binary.BigEndian.PutUint16(buf[offset:offset+2], uint16(len(b)))
+	copy(buf[offset+2:], b)
+	return buf
+}
+
+// ChatDeletedPayload builds the payload for MsgChatDeleted
+// (msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room).
+func ChatDeletedPayload(msgID string, userID uint32, room string) []byte {
+	if room == "" {
+		room = DefaultRoom
+	}
+	mid := []byte(msgID)
+	r := []byte(room)
+	buf := make([]byte, 1+len(mid)+4+1+len(r))
+	buf[0] = byte(len(mid))
+	copy(buf[1:], mid)
+	offset := 1 + len(mid)
+	binary.BigEndian.PutUint32(buf[offset:offset+4], userID)
+	offset += 4
+	buf[offset] = byte(len(r))
+	copy(buf[offset+1:], r)
+	return buf
+}
+
 // RoomJoinedPayload builds the payload for MsgRoomJoined (user_id(4) + room_len(1) + room).
 func RoomJoinedPayload(userID uint32, room string) []byte {
 	r := []byte(room)
@@ -264,3 +309,57 @@ func ParseRoomList(payload []byte) ([]string, error) {
 	}
 	return rooms, nil
 }
+
+// ParseChatEdited parses a MsgChatEdited payload
+// (msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room + body_len(2) + body).
+func ParseChatEdited(payload []byte) (msgID string, userID uint32, room string, body string, err error) {
+	if len(payload) < 2 {
+		return "", 0, "", "", fmt.Errorf("chat edited payload too short")
+	}
+	midLen := int(payload[0])
+	if len(payload) < 1+midLen+4+1 {
+		return "", 0, "", "", fmt.Errorf("chat edited payload truncated")
+	}
+	msgID = string(payload[1 : 1+midLen])
+	offset := 1 + midLen
+	userID = binary.BigEndian.Uint32(payload[offset : offset+4])
+	offset += 4
+	roomLen := int(payload[offset])
+	offset++
+	if len(payload) < offset+roomLen+2 {
+		return "", 0, "", "", fmt.Errorf("chat edited payload truncated")
+	}
+	room = string(payload[offset : offset+roomLen])
+	offset += roomLen
+	bodyLen := int(binary.BigEndian.Uint16(payload[offset : offset+2]))
+	offset += 2
+	if len(payload) < offset+bodyLen {
+		return "", 0, "", "", fmt.Errorf("chat edited payload truncated")
+	}
+	body = string(payload[offset : offset+bodyLen])
+	return msgID, userID, room, body, nil
+}
+
+// ParseChatDeleted parses a MsgChatDeleted payload
+// (msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room).
+func ParseChatDeleted(payload []byte) (msgID string, userID uint32, room string, err error) {
+	if len(payload) < 2 {
+		return "", 0, "", fmt.Errorf("chat deleted payload too short")
+	}
+	midLen := int(payload[0])
+	if len(payload) < 1+midLen+4+1 {
+		return "", 0, "", fmt.Errorf("chat deleted payload truncated")
+	}
+	msgID = string(payload[1 : 1+midLen])
+	offset := 1 + midLen
+	userID = binary.BigEndian.Uint32(payload[offset : offset+4])
+	offset += 4
+	roomLen := int(payload[offset])
+	offset++
+	if len(payload) < offset+roomLen {
+		return "", 0, "", fmt.Errorf("chat deleted payload truncated")
+	}
+	room = string(payload[offset : offset+roomLen])
+	return msgID, userID, room, nil
+}
+
