@@ -1,13 +1,16 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/nanatheblue/backtrack/protocol"
+	"github.com/nanatheblue/backtrack/repository/message"
 )
 
 // The Hub is the single owner of all shared chat state (the users map,
@@ -60,8 +63,9 @@ type leaveRoomEvent struct {
 
 // Hub routes events between connected users and manages channels/rooms.
 type Hub struct {
-	users map[uint32]*User            // owned by Run(); never touch it from another goroutine
-	rooms map[string]map[uint32]*User // owned by Run(); roomName -> set of users
+	users   map[uint32]*User            // owned by Run(); never touch it from another goroutine
+	rooms   map[string]map[uint32]*User // owned by Run(); roomName -> set of users
+	msgRepo message.Repository
 
 	register   chan registerEvent
 	unregister chan *User
@@ -74,10 +78,17 @@ type Hub struct {
 }
 
 // NewHub creates a hub. Call Run() in its own goroutine to start it.
-func NewHub() *Hub {
+// An optional message.Repository can be provided to persist chat messages.
+func NewHub(repos ...message.Repository) *Hub {
+	var repo message.Repository
+	if len(repos) > 0 {
+		repo = repos[0]
+	}
+
 	h := &Hub{
 		users:      make(map[uint32]*User),
 		rooms:      make(map[string]map[uint32]*User),
+		msgRepo:    repo,
 		register:   make(chan registerEvent),
 		unregister: make(chan *User),
 		chat:       make(chan chatEvent),
@@ -285,16 +296,26 @@ func (h *Hub) handleChat(e chatEvent) {
 
 	members, exists := h.rooms[room]
 	if !exists {
-		if len(h.rooms) >= MaxActiveRooms {
-			e.from.send(protocol.MsgServerError, protocol.ErrorPayload("maximum channel limit reached"))
-			return
-		}
-		members = make(map[uint32]*User)
-		h.rooms[room] = members
-		members[e.from.ID] = e.from
-		h.broadcastRoomList()
-	} else if _, inRoom := members[e.from.ID]; !inRoom {
-		members[e.from.ID] = e.from
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(fmt.Sprintf("channel %q does not exist", room)))
+		return
+	}
+	if _, inRoom := members[e.from.ID]; !inRoom {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(fmt.Sprintf("cannot send message: you have not joined channel %q", room)))
+		return
+	}
+
+	// Persist message asynchronously
+	if h.msgRepo != nil {
+		go func(m *message.Message) {
+			if err := h.msgRepo.Save(context.Background(), m); err != nil {
+				slog.Error("failed to persist message", "room", m.Room, "username", m.UserName, "error", err)
+			}
+		}(&message.Message{
+			Room:     room,
+			UserID:   e.from.ID,
+			UserName: e.from.Username,
+			Body:     e.body,
+		})
 	}
 
 	chatMSG := protocol.ChatRecvPayload(e.from.ID, room, e.body)

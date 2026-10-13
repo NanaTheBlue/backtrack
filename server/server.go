@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nanatheblue/backtrack/protocol"
+	"github.com/nanatheblue/backtrack/repository/message"
 )
 
 const (
@@ -165,21 +166,29 @@ func (u *User) writeLoop() {
 type Server struct {
 	listener    net.Listener
 	hub         *Hub
+	msgRepo     message.Repository
 	mu          sync.RWMutex
 	nextID      atomic.Uint32
 	connLimiter chan struct{}
 }
 
 // New creates a new Server listening on addr (e.g. ":9000").
-func New(addr string) (*Server, error) {
+// An optional message.Repository can be provided for message persistence.
+func New(addr string, repos ...message.Repository) (*Server, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
+	var repo message.Repository
+	if len(repos) > 0 {
+		repo = repos[0]
+	}
+
 	s := &Server{
 		listener:    ln,
-		hub:         NewHub(),
+		hub:         NewHub(repo),
+		msgRepo:     repo,
 		connLimiter: make(chan struct{}, defaultMaxConnections),
 	}
 	s.nextID.Store(1)
