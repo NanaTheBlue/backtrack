@@ -207,3 +207,37 @@ func TestUnit_UserTokenBucketRateLimiting(t *testing.T) {
 	}
 }
 
+func TestUnit_HubChatRequiresRoomMembership(t *testing.T) {
+	hub := server.NewHub()
+	go hub.Run()
+	defer hub.Stop()
+
+	u, c := server.NewTestUser(1, "SNEAKY-USER", 0)
+	defer u.Close()
+	defer c.Close()
+
+	if err := hub.Register(u); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	// Drain welcome and roomlist
+	protocol.ReadMessage(c)
+	protocol.ReadMessage(c)
+
+	// Attempt to chat in a room that hasn't been joined
+	hub.Chat(u, "UNJOINED-ROOM", "hello stealth mode")
+
+	c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	msg, err := protocol.ReadMessage(c)
+	if err != nil {
+		t.Fatalf("Expected MsgServerError response, but read failed: %v", err)
+	}
+	if msg.Type != protocol.MsgServerError {
+		t.Fatalf("Expected MsgServerError (0xFF) for unjoined room chat, got 0x%02x", msg.Type)
+	}
+	errMsg, err := protocol.ParseServerError(msg.Payload)
+	if err != nil || errMsg == "" {
+		t.Errorf("Expected descriptive error message, got %q (err=%v)", errMsg, err)
+	}
+}
+
+

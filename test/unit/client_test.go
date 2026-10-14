@@ -190,17 +190,17 @@ func TestUnit_ChatBodyLengthLimits(t *testing.T) {
 	}
 
 	// Ensure ChatRecvPayload safely caps to MaxChatBodyLen without overflowing
-	recvPayload := protocol.ChatRecvPayload(1, "GLOBAL", tooLong)
+	recvPayload := protocol.ChatRecvPayload("msg-12345", 1, "GLOBAL", tooLong)
 	if len(recvPayload) > protocol.MaxPayloadSize {
 		t.Errorf("ChatRecvPayload exceeded MaxPayloadSize: %d bytes", len(recvPayload))
 	}
 
-	uid, r, body, err := protocol.ParseChatRecv(recvPayload)
+	mid, uid, r, body, err := protocol.ParseChatRecv(recvPayload)
 	if err != nil {
 		t.Fatalf("Failed to parse chat recv: %v", err)
 	}
-	if uid != 1 || r != "GLOBAL" || len(body) != protocol.MaxChatBodyLen {
-		t.Errorf("Unexpected ChatRecv parsed: uid=%d, room=%q, len=%d", uid, r, len(body))
+	if mid != "msg-12345" || uid != 1 || r != "GLOBAL" || len(body) != protocol.MaxChatBodyLen {
+		t.Errorf("Unexpected ChatRecv parsed: mid=%q, uid=%d, room=%q, len=%d", mid, uid, r, len(body))
 	}
 }
 
@@ -227,4 +227,53 @@ func TestUnit_ReadMessageWithLimit(t *testing.T) {
 		t.Errorf("Expected payload len 100, got %d", len(msg.Payload))
 	}
 }
+
+func TestUnit_ChatEditAndDeletePayloads(t *testing.T) {
+	// 1. Client -> Server MsgChatEdit
+	editPayload, err := protocol.EncodeChatEdit("msg-42", "GLOBAL", "corrected message")
+	if err != nil {
+		t.Fatalf("EncodeChatEdit failed: %v", err)
+	}
+	mid, room, body, err := protocol.ParseChatEdit(editPayload)
+	if err != nil {
+		t.Fatalf("ParseChatEdit failed: %v", err)
+	}
+	if mid != "msg-42" || room != "GLOBAL" || body != "corrected message" {
+		t.Errorf("ParseChatEdit mismatch: id=%q, room=%q, body=%q", mid, room, body)
+	}
+
+	// 2. Client -> Server MsgChatDelete
+	delPayload, err := protocol.EncodeChatDelete("msg-99", "LOUNGE")
+	if err != nil {
+		t.Fatalf("EncodeChatDelete failed: %v", err)
+	}
+	mid, room, err = protocol.ParseChatDelete(delPayload)
+	if err != nil {
+		t.Fatalf("ParseChatDelete failed: %v", err)
+	}
+	if mid != "msg-99" || room != "LOUNGE" {
+		t.Errorf("ParseChatDelete mismatch: id=%q, room=%q", mid, room)
+	}
+
+	// 3. Server -> Client MsgChatEdited
+	srvEditPayload := protocol.ChatEditedPayload("msg-42", 101, "GLOBAL", "new content")
+	mid, uid, room, body, err := protocol.ParseChatEdited(srvEditPayload)
+	if err != nil {
+		t.Fatalf("ParseChatEdited failed: %v", err)
+	}
+	if mid != "msg-42" || uid != 101 || room != "GLOBAL" || body != "new content" {
+		t.Errorf("ParseChatEdited mismatch: id=%q, uid=%d, room=%q, body=%q", mid, uid, room, body)
+	}
+
+	// 4. Server -> Client MsgChatDeleted
+	srvDelPayload := protocol.ChatDeletedPayload("msg-99", 102, "LOUNGE")
+	mid, uid, room, err = protocol.ParseChatDeleted(srvDelPayload)
+	if err != nil {
+		t.Fatalf("ParseChatDeleted failed: %v", err)
+	}
+	if mid != "msg-99" || uid != 102 || room != "LOUNGE" {
+		t.Errorf("ParseChatDeleted mismatch: id=%q, uid=%d, room=%q", mid, uid, room)
+	}
+}
+
 

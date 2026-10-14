@@ -1,13 +1,17 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/nanatheblue/backtrack/protocol"
+	"github.com/nanatheblue/backtrack/repository/message"
 )
 
 // The Hub is the single owner of all shared chat state (the users map,
@@ -25,7 +29,16 @@ const (
 
 	// MaxRoomsPerUser is the maximum number of channels a single client may join concurrently.
 	MaxRoomsPerUser = 16
+
+	// MaxTrackedMessages is the maximum number of recent messages kept in memory for session edit/delete.
+	MaxTrackedMessages = 4096
 )
+
+// messageMeta tracks the sender and channel of a message sent in the current session.
+type messageMeta struct {
+	userID uint32
+	room   string
+}
 
 // registerEvent asks the hub to register a new user and confirms uniqueness.
 type registerEvent struct {
@@ -38,6 +51,21 @@ type chatEvent struct {
 	from *User
 	room string
 	body string
+}
+
+// chatEditEvent asks the hub to edit an existing chat message.
+type chatEditEvent struct {
+	from  *User
+	msgID string
+	room  string
+	body  string
+}
+
+// chatDeleteEvent asks the hub to delete an existing chat message.
+type chatDeleteEvent struct {
+	from  *User
+	msgID string
+	room  string
 }
 
 // presenceEvent asks the hub to change a user's status and announce it.
@@ -60,12 +88,17 @@ type leaveRoomEvent struct {
 
 // Hub routes events between connected users and manages channels/rooms.
 type Hub struct {
-	users map[uint32]*User            // owned by Run(); never touch it from another goroutine
-	rooms map[string]map[uint32]*User // owned by Run(); roomName -> set of users
+	users         map[uint32]*User            // owned by Run(); never touch it from another goroutine
+	rooms         map[string]map[uint32]*User // owned by Run(); roomName -> set of users
+	messageOwners map[string]messageMeta      // owned by Run(); msgID -> messageMeta
+	messageOrder  []string                    // owned by Run(); FIFO list of msgIDs for bounded memory
+	msgRepo       message.Repository
 
 	register   chan registerEvent
 	unregister chan *User
 	chat       chan chatEvent
+	chatEdit   chan chatEditEvent
+	chatDelete chan chatDeleteEvent
 	presence   chan presenceEvent
 	joinRoom   chan joinRoomEvent
 	leaveRoom  chan leaveRoomEvent
@@ -74,17 +107,28 @@ type Hub struct {
 }
 
 // NewHub creates a hub. Call Run() in its own goroutine to start it.
-func NewHub() *Hub {
+// An optional message.Repository can be provided to persist chat messages.
+func NewHub(repos ...message.Repository) *Hub {
+	var repo message.Repository
+	if len(repos) > 0 {
+		repo = repos[0]
+	}
+
 	h := &Hub{
-		users:      make(map[uint32]*User),
-		rooms:      make(map[string]map[uint32]*User),
-		register:   make(chan registerEvent),
-		unregister: make(chan *User),
-		chat:       make(chan chatEvent),
-		presence:   make(chan presenceEvent),
-		joinRoom:   make(chan joinRoomEvent),
-		leaveRoom:  make(chan leaveRoomEvent),
-		done:       make(chan struct{}),
+		users:         make(map[uint32]*User),
+		rooms:         make(map[string]map[uint32]*User),
+		messageOwners: make(map[string]messageMeta),
+		messageOrder:  make([]string, 0, MaxTrackedMessages),
+		msgRepo:       repo,
+		register:      make(chan registerEvent),
+		unregister:    make(chan *User),
+		chat:          make(chan chatEvent),
+		chatEdit:      make(chan chatEditEvent),
+		chatDelete:    make(chan chatDeleteEvent),
+		presence:      make(chan presenceEvent),
+		joinRoom:      make(chan joinRoomEvent),
+		leaveRoom:     make(chan leaveRoomEvent),
+		done:          make(chan struct{}),
 	}
 	h.rooms[protocol.DefaultRoom] = make(map[uint32]*User)
 	return h
@@ -101,6 +145,10 @@ func (h *Hub) Run() {
 			h.handleUnregister(u)
 		case e := <-h.chat:
 			h.handleChat(e)
+		case e := <-h.chatEdit:
+			h.handleChatEdit(e)
+		case e := <-h.chatDelete:
+			h.handleChatDelete(e)
 		case e := <-h.presence:
 			h.handlePresence(e)
 		case e := <-h.joinRoom:
@@ -151,6 +199,26 @@ func (h *Hub) Unregister(u *User) {
 func (h *Hub) Chat(from *User, room string, body string) {
 	select {
 	case h.chat <- chatEvent{from: from, room: room, body: body}:
+		return
+	case <-h.done:
+		return
+	}
+}
+
+// EditChat requests to edit an existing message.
+func (h *Hub) EditChat(from *User, msgID string, room string, body string) {
+	select {
+	case h.chatEdit <- chatEditEvent{from: from, msgID: msgID, room: room, body: body}:
+		return
+	case <-h.done:
+		return
+	}
+}
+
+// DeleteChat requests to delete an existing message.
+func (h *Hub) DeleteChat(from *User, msgID string, room string) {
+	select {
+	case h.chatDelete <- chatDeleteEvent{from: from, msgID: msgID, room: room}:
 		return
 	case <-h.done:
 		return
@@ -253,6 +321,13 @@ func (h *Hub) handleUnregister(u *User) {
 	}
 	delete(h.users, u.ID)
 
+	// Invalidate session-owned messages so recycled user IDs cannot edit them
+	for id, meta := range h.messageOwners {
+		if meta.userID == u.ID {
+			delete(h.messageOwners, id)
+		}
+	}
+
 	roomsChanged := false
 	for room, members := range h.rooms {
 		if _, inRoom := members[u.ID]; inRoom {
@@ -285,20 +360,138 @@ func (h *Hub) handleChat(e chatEvent) {
 
 	members, exists := h.rooms[room]
 	if !exists {
-		if len(h.rooms) >= MaxActiveRooms {
-			e.from.send(protocol.MsgServerError, protocol.ErrorPayload("maximum channel limit reached"))
-			return
-		}
-		members = make(map[uint32]*User)
-		h.rooms[room] = members
-		members[e.from.ID] = e.from
-		h.broadcastRoomList()
-	} else if _, inRoom := members[e.from.ID]; !inRoom {
-		members[e.from.ID] = e.from
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(fmt.Sprintf("channel %q does not exist", room)))
+		return
+	}
+	if _, inRoom := members[e.from.ID]; !inRoom {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(fmt.Sprintf("cannot send message: you have not joined channel %q", room)))
+		return
 	}
 
-	chatMSG := protocol.ChatRecvPayload(e.from.ID, room, e.body)
+	msgID := uuid.NewString()
+
+	// Track in-memory message ownership for the active connection session
+	h.messageOwners[msgID] = messageMeta{userID: e.from.ID, room: room}
+	h.messageOrder = append(h.messageOrder, msgID)
+	if len(h.messageOrder) > MaxTrackedMessages {
+		oldest := h.messageOrder[0]
+		h.messageOrder = h.messageOrder[1:]
+		delete(h.messageOwners, oldest)
+	}
+
+	// Persist message asynchronously
+	if h.msgRepo != nil {
+		go func(m *message.Message) {
+			if err := h.msgRepo.Save(context.Background(), m); err != nil {
+				slog.Error("failed to persist message", "room", m.Room, "username", m.UserName, "error", err)
+			}
+		}(&message.Message{
+			ID:       msgID,
+			Room:     room,
+			UserID:   e.from.ID,
+			UserName: e.from.Username,
+			Body:     e.body,
+		})
+	}
+
+	chatMSG := protocol.ChatRecvPayload(msgID, e.from.ID, room, e.body)
 	h.broadcastToRoom(room, protocol.MsgChatRecv, chatMSG, 0)
+}
+
+func (h *Hub) handleChatEdit(e chatEditEvent) {
+	room := strings.ToUpper(strings.TrimSpace(e.room))
+	if room == "" {
+		room = protocol.DefaultRoom
+	}
+	if err := protocol.ValidateRoomName(room); err != nil {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
+		return
+	}
+
+	members, exists := h.rooms[room]
+	if !exists {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(fmt.Sprintf("channel %q does not exist", room)))
+		return
+	}
+	if _, inRoom := members[e.from.ID]; !inRoom {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(fmt.Sprintf("cannot edit message: you have not joined channel %q", room)))
+		return
+	}
+
+	meta, found := h.messageOwners[e.msgID]
+	if !found {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("message not found or not eligible for editing"))
+		return
+	}
+	if meta.userID != e.from.ID {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("permission denied: you can only edit messages sent during your current session"))
+		return
+	}
+	if meta.room != room {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("message does not belong to specified channel"))
+		return
+	}
+
+	// Persist edit asynchronously
+	if h.msgRepo != nil {
+		go func(msgID, r, body string, uid uint32) {
+			if err := h.msgRepo.Edit(context.Background(), &message.Message{ID: msgID, Room: r, Body: body}, uid); err != nil {
+				slog.Error("failed to persist message edit", "msg_id", msgID, "error", err)
+			}
+		}(e.msgID, room, e.body, e.from.ID)
+	}
+
+	payload := protocol.ChatEditedPayload(e.msgID, e.from.ID, room, e.body)
+	h.broadcastToRoom(room, protocol.MsgChatEdited, payload, 0)
+}
+
+func (h *Hub) handleChatDelete(e chatDeleteEvent) {
+	room := strings.ToUpper(strings.TrimSpace(e.room))
+	if room == "" {
+		room = protocol.DefaultRoom
+	}
+	if err := protocol.ValidateRoomName(room); err != nil {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
+		return
+	}
+
+	members, exists := h.rooms[room]
+	if !exists {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(fmt.Sprintf("channel %q does not exist", room)))
+		return
+	}
+	if _, inRoom := members[e.from.ID]; !inRoom {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload(fmt.Sprintf("cannot delete message: you have not joined channel %q", room)))
+		return
+	}
+
+	meta, found := h.messageOwners[e.msgID]
+	if !found {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("message not found or not eligible for deletion"))
+		return
+	}
+	if meta.userID != e.from.ID {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("permission denied: you can only delete messages sent during your current session"))
+		return
+	}
+	if meta.room != room {
+		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("message does not belong to specified channel"))
+		return
+	}
+
+	delete(h.messageOwners, e.msgID)
+
+	// Persist delete asynchronously
+	if h.msgRepo != nil {
+		go func(msgID string, uid uint32) {
+			if err := h.msgRepo.Delete(context.Background(), msgID, uid); err != nil {
+				slog.Error("failed to persist message delete", "msg_id", msgID, "error", err)
+			}
+		}(e.msgID, e.from.ID)
+	}
+
+	payload := protocol.ChatDeletedPayload(e.msgID, e.from.ID, room)
+	h.broadcastToRoom(room, protocol.MsgChatDeleted, payload, 0)
 }
 
 func (h *Hub) handleJoinRoom(e joinRoomEvent) {
