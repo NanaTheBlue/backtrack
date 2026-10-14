@@ -137,6 +137,37 @@ func (a *App) SendMessage(room string, body string) error {
 	return a.writeMessage(protocol.MsgChatSend, payload)
 }
 
+// EditMessage sends a request to edit an existing message
+func (a *App) EditMessage(msgID string, room string, body string) error {
+	if room == "" {
+		room = protocol.DefaultRoom
+	}
+	payload, err := protocol.EncodeChatEdit(msgID, room, body)
+	if err != nil {
+		return err
+	}
+	return a.writeMessage(protocol.MsgChatEdit, payload)
+}
+
+// DeleteMessage sends a request to delete an existing message
+func (a *App) DeleteMessage(msgID string, room string) error {
+	if room == "" {
+		room = protocol.DefaultRoom
+	}
+	payload, err := protocol.EncodeChatDelete(msgID, room)
+	if err != nil {
+		return err
+	}
+	return a.writeMessage(protocol.MsgChatDelete, payload)
+}
+
+// GetUserID returns the currently connected user's assigned ID
+func (a *App) GetUserID() uint32 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.userID
+}
+
 // JoinRoom sends a request to join a channel
 func (a *App) JoinRoom(room string) error {
 	payload, err := protocol.EncodeJoinRoom(room)
@@ -290,6 +321,27 @@ func (a *App) readLoop(conn net.Conn) {
 					"room":     room,
 					"body":     body,
 					"time":     time.Now().Format("15:04:05"),
+				})
+			}
+
+		case protocol.MsgChatEdited:
+			msgID, uid, room, body, err := protocol.ParseChatEdited(msg.Payload)
+			if err == nil {
+				runtime.EventsEmit(a.ctx, "chat_edited", map[string]interface{}{
+					"id":     msgID,
+					"userId": uid,
+					"room":   room,
+					"body":   body,
+				})
+			}
+
+		case protocol.MsgChatDeleted:
+			msgID, uid, room, err := protocol.ParseChatDeleted(msg.Payload)
+			if err == nil {
+				runtime.EventsEmit(a.ctx, "chat_deleted", map[string]interface{}{
+					"id":     msgID,
+					"userId": uid,
+					"room":   room,
 				})
 			}
 

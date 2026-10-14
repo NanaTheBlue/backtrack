@@ -6,12 +6,24 @@ export function Connect(arg1, arg2, arg3) {
   return window['go']['main']['App']['Connect'](arg1, arg2, arg3);
 }
 
+export function DeleteMessage(arg1, arg2) {
+  return window['go']['main']['App']['DeleteMessage'](arg1, arg2);
+}
+
 export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
 }
 
+export function EditMessage(arg1, arg2, arg3) {
+  return window['go']['main']['App']['EditMessage'](arg1, arg2, arg3);
+}
+
 export function GetMemoryUsage() {
   return window['go']['main']['App']['GetMemoryUsage']();
+}
+
+export function GetUserID() {
+  return window['go']['main']['App']['GetUserID']();
 }
 
 export function IsConnected() {
