@@ -269,7 +269,7 @@ func (a *App) readLoop(conn net.Conn) {
 			}
 
 		case protocol.MsgChatRecv:
-			uid, room, body, err := protocol.ParseChatRecv(msg.Payload)
+			msgID, uid, room, body, err := protocol.ParseChatRecv(msg.Payload)
 			if err == nil {
 				a.mu.Lock()
 				sender := a.users[uid]
@@ -283,6 +283,7 @@ func (a *App) readLoop(conn net.Conn) {
 				a.mu.Unlock()
 
 				runtime.EventsEmit(a.ctx, "chat_message", map[string]interface{}{
+					"id":       msgID,
 					"userId":   uid,
 					"username": sender.Username,
 					"avatarId": sender.AvatarID,

@@ -190,17 +190,17 @@ func TestUnit_ChatBodyLengthLimits(t *testing.T) {
 	}
 
 	// Ensure ChatRecvPayload safely caps to MaxChatBodyLen without overflowing
-	recvPayload := protocol.ChatRecvPayload(1, "GLOBAL", tooLong)
+	recvPayload := protocol.ChatRecvPayload("msg-12345", 1, "GLOBAL", tooLong)
 	if len(recvPayload) > protocol.MaxPayloadSize {
 		t.Errorf("ChatRecvPayload exceeded MaxPayloadSize: %d bytes", len(recvPayload))
 	}
 
-	uid, r, body, err := protocol.ParseChatRecv(recvPayload)
+	mid, uid, r, body, err := protocol.ParseChatRecv(recvPayload)
 	if err != nil {
 		t.Fatalf("Failed to parse chat recv: %v", err)
 	}
-	if uid != 1 || r != "GLOBAL" || len(body) != protocol.MaxChatBodyLen {
-		t.Errorf("Unexpected ChatRecv parsed: uid=%d, room=%q, len=%d", uid, r, len(body))
+	if mid != "msg-12345" || uid != 1 || r != "GLOBAL" || len(body) != protocol.MaxChatBodyLen {
+		t.Errorf("Unexpected ChatRecv parsed: mid=%q, uid=%d, room=%q, len=%d", mid, uid, r, len(body))
 	}
 }
 

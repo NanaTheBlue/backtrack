@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/nanatheblue/backtrack/protocol"
 	"github.com/nanatheblue/backtrack/repository/message"
 )
@@ -304,6 +305,8 @@ func (h *Hub) handleChat(e chatEvent) {
 		return
 	}
 
+	msgID := uuid.NewString()
+
 	// Persist message asynchronously
 	if h.msgRepo != nil {
 		go func(m *message.Message) {
@@ -311,6 +314,7 @@ func (h *Hub) handleChat(e chatEvent) {
 				slog.Error("failed to persist message", "room", m.Room, "username", m.UserName, "error", err)
 			}
 		}(&message.Message{
+			ID:       msgID,
 			Room:     room,
 			UserID:   e.from.ID,
 			UserName: e.from.Username,
@@ -318,7 +322,7 @@ func (h *Hub) handleChat(e chatEvent) {
 		})
 	}
 
-	chatMSG := protocol.ChatRecvPayload(e.from.ID, room, e.body)
+	chatMSG := protocol.ChatRecvPayload(msgID, e.from.ID, room, e.body)
 	h.broadcastToRoom(room, protocol.MsgChatRecv, chatMSG, 0)
 }
 

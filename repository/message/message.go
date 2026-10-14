@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nanatheblue/backtrack/protocol"
 )
@@ -28,14 +29,17 @@ func (r *repository) Save(ctx context.Context, message *Message) error {
 	if message.Room == "" {
 		message.Room = protocol.DefaultRoom
 	}
+	if message.ID == "" {
+		message.ID = uuid.NewString()
+	}
 
 	query := `
-		INSERT INTO messages (room, user_id, user_name, body)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, created_at
+		INSERT INTO messages (id, room, user_id, user_name, body)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING created_at
 	`
-	err := r.pool.QueryRow(ctx, query, message.Room, message.UserID, message.UserName, message.Body).
-		Scan(&message.ID, &message.CreatedAt)
+	err := r.pool.QueryRow(ctx, query, message.ID, message.Room, message.UserID, message.UserName, message.Body).
+		Scan(&message.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save message: %w", err)
 	}
