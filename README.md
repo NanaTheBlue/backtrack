@@ -95,6 +95,18 @@ go build -o bin/server ./cmd/server
 go run ./cmd/server/main.go -addr :9000
 ```
 
+#### Message persistence (optional)
+
+Without a database the server runs fully in memory. To persist messages in PostgreSQL (13+):
+
+```bash
+# create the schema once
+psql "$DATABASE_URL" -f migrations/001_create_messages.sql
+
+# run with persistence (or pass -db "postgres://...")
+DATABASE_URL="postgres://user:pass@localhost:5432/backtrack" ./bin/server
+```
+
 ### Desktop Client (Wails)
 
 ```bash

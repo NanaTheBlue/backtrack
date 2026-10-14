@@ -17,19 +17,26 @@ func main() {
 	slog.SetDefault(logger)
 
 	addr := flag.String("addr", ":9000", "TCP address to listen on")
+	dbURL := flag.String("db", os.Getenv("DATABASE_URL"),
+		"PostgreSQL connection string (defaults to $DATABASE_URL); leave empty to run without message persistence")
 	flag.Parse()
 
-	ctx := context.Background()
-	dbpool, err := repository.NewPostgresPool(ctx, "")
-	if err != nil {
-		slog.Error("failed to connect to database", "error", err)
-		os.Exit(1)
+	// Persistence is optional: without a database the server runs fully in memory.
+	var repos []message.Repository
+	if *dbURL != "" {
+		dbpool, err := repository.NewPostgresPool(context.Background(), *dbURL)
+		if err != nil {
+			slog.Error("failed to connect to database", "error", err)
+			os.Exit(1)
+		}
+		defer dbpool.Close()
+		repos = append(repos, message.New(dbpool))
+		slog.Info("message persistence enabled")
+	} else {
+		slog.Warn("DATABASE_URL not set; running without message persistence")
 	}
-	defer dbpool.Close()
 
-	msgRepo := message.New(dbpool)
-
-	srv, err := server.New(*addr, msgRepo)
+	srv, err := server.New(*addr, repos...)
 	if err != nil {
 		slog.Error("could not start server", "error", err)
 		os.Exit(1)
