@@ -369,7 +369,7 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 			user.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
 			return
 		}
-		slog.Info("chat edit", "username", user.Username, "msg_id", msgID, "room", room)
+		slog.Info("chat edit", "username", user.Username, "msg_id", msgID, "room", room, "message", body)
 		s.hub.EditChat(user, msgID, room, body)
 
 	case protocol.MsgChatDelete:
