@@ -357,6 +357,36 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 		slog.Info("chat message", "username", user.Username, "room", room, "message", body)
 		s.hub.Chat(user, room, body)
 
+	case protocol.MsgChatEdit:
+		if !user.allowMessage() {
+			slog.Warn("rate limit exceeded", "username", user.Username)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload("rate limit exceeded: please slow down (max 1 msg/sec)"))
+			return
+		}
+		msgID, room, body, err := protocol.ParseChatEdit(msg.Payload)
+		if err != nil {
+			slog.Warn("bad chat edit", "username", user.Username, "error", err)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
+			return
+		}
+		slog.Info("chat edit", "username", user.Username, "msg_id", msgID, "room", room)
+		s.hub.EditChat(user, msgID, room, body)
+
+	case protocol.MsgChatDelete:
+		if !user.allowMessage() {
+			slog.Warn("rate limit exceeded", "username", user.Username)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload("rate limit exceeded: please slow down (max 1 msg/sec)"))
+			return
+		}
+		msgID, room, err := protocol.ParseChatDelete(msg.Payload)
+		if err != nil {
+			slog.Warn("bad chat delete", "username", user.Username, "error", err)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
+			return
+		}
+		slog.Info("chat delete", "username", user.Username, "msg_id", msgID, "room", room)
+		s.hub.DeleteChat(user, msgID, room)
+
 	case protocol.MsgJoinRoom:
 		room, err := protocol.ParseJoinRoom(msg.Payload)
 		if err != nil {
