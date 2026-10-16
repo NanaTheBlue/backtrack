@@ -18,7 +18,7 @@ Older consoles have limited memory and CPU. Parsing JSON in C requires a library
 
 ## Protocol
 
-Every message follows this
+Every message follows this 3-byte frame header:
 
 - **type**: 1 byte — what kind of message this is
 - **length**: 2 bytes — big-endian, how many payload bytes follow
@@ -27,18 +27,22 @@ Every message follows this
 ### Client → Server
 
 | Type | Name | Payload |
+| --- | --- | --- |
 | `0x01` | Identify | `username_len(1) + username + avatar_id(2)` |
 | `0x02` | Chat Send | `room_len(1) + room + body_len(2) + body` |
 | `0x03` | Set Presence | `status(1)` |
 | `0x04` | Pong | *(no payload)* |
 | `0x05` | Join Room | `room_len(1) + room` |
 | `0x06` | Leave Room | `room_len(1) + room` |
+| `0x07` | Chat Edit | `msg_id_len(1) + msg_id + room_len(1) + room + body_len(2) + body` |
+| `0x08` | Chat Delete | `msg_id_len(1) + msg_id + room_len(1) + room` |
 
 ### Server → Client
 
 | Type | Name | Payload |
+| --- | --- | --- |
 | `0x80` | Welcome | `user_id(4)` |
-| `0x81` | Chat Recv | `user_id(4) + room_len(1) + room + body_len(2) + body` |
+| `0x81` | Chat Recv | `msg_id_len(1) + msg_id + user_id(4) + username_len(1) + username + room_len(1) + room + body_len(2) + body` |
 | `0x82` | User Joined | `user_id(4) + avatar_id(2) + username_len(1) + username` |
 | `0x83` | User Left | `user_id(4)` |
 | `0x84` | User Info | `user_id(4) + avatar_id(2) + status(1) + username_len(1) + username` |
@@ -47,12 +51,14 @@ Every message follows this
 | `0x87` | Room Joined | `user_id(4) + room_len(1) + room` |
 | `0x88` | Room Left | `user_id(4) + room_len(1) + room` |
 | `0x89` | Room List | `room_count(2) + [room_len(1) + room]...` |
+| `0x8A` | Chat Edited | `msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room + body_len(2) + body` |
+| `0x8B` | Chat Deleted | `msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room` |
 | `0xFF` | Error | `msg_len(2) + msg` |
 
 ### Presence Statuses
 
 | Value | Meaning |
-
+| --- | --- |
 | `0x00` | Online |
 | `0x01` | Away |
 | `0x02` | Busy |
@@ -70,7 +76,10 @@ backtrack/
 ├── cmd/
 │   └── server/main.go      # Server entrypoint — parses flags, starts the server
 ├── desktop/                # Wails Desktop Application (Modern UI Client)
+├── migrations/             # PostgreSQL schema migrations
 ├── protocol/               # Binary wire format — framing, builders, parsers
+├── repository/             # PostgreSQL connection pool and message repository
+├── retry/                  # Exponential backoff retry utility
 ├── server/
 │   ├── server.go           # Chat server — TCP connections & lifecycle
 │   └── hub.go              # Lock-free event router for chat state
@@ -123,7 +132,6 @@ wails build
 
 - [ ] Console clients (C — PSP, Wii, DS, etc.)
 - [x] Channels / rooms
-- [ ] Message history / persistence
+- [x] Message history / persistence
 - [ ] User authentication
 - [x] Tests
-
