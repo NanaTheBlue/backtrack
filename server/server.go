@@ -391,6 +391,7 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 		room, err := protocol.ParseJoinRoom(msg.Payload)
 		if err != nil {
 			slog.Warn("bad join room", "username", user.Username, "error", err)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
 			return
 		}
 		slog.Info("join room", "username", user.Username, "room", room)
@@ -400,6 +401,7 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 		room, err := protocol.ParseLeaveRoom(msg.Payload)
 		if err != nil {
 			slog.Warn("bad leave room", "username", user.Username, "error", err)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
 			return
 		}
 		slog.Info("leave room", "username", user.Username, "room", room)
@@ -408,6 +410,8 @@ func (s *Server) handleMessage(user *User, msg protocol.Message) {
 	case protocol.MsgSetPresence:
 		status, err := protocol.ParseSetPresence(msg.Payload)
 		if err != nil {
+			slog.Warn("bad set presence", "username", user.Username, "error", err)
+			user.send(protocol.MsgServerError, protocol.ErrorPayload(err.Error()))
 			return
 		}
 		s.hub.SetPresence(user, status)

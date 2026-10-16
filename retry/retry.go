@@ -3,13 +3,16 @@ package retry
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 )
 
 // Do executes an operation with exponential backoff until it succeeds,
 // maxAttempts is reached, or ctx is cancelled.
 func Do(ctx context.Context, maxAttempts int, initialBackoff time.Duration, op func() error) error {
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
 	backoff := initialBackoff
 	var lastErr error
 
@@ -19,15 +22,23 @@ func Do(ctx context.Context, maxAttempts int, initialBackoff time.Duration, op f
 			return nil
 		}
 
-		log.Printf("attempt %d/%d failed: %v. Retrying in %v...", attempt, maxAttempts, lastErr, backoff)
+		slog.Warn("operation attempt failed, retrying",
+			"attempt", attempt,
+			"max_attempts", maxAttempts,
+			"backoff", backoff.String(),
+			"error", lastErr,
+		)
 
 		if attempt == maxAttempts {
 			break
 		}
+
+		timer := time.NewTimer(backoff)
 		select {
-		case <-time.After(backoff):
+		case <-timer.C:
 			backoff *= 2
 		case <-ctx.Done():
+			timer.Stop()
 			return fmt.Errorf("retry aborted by context: %w", ctx.Err())
 		}
 	}

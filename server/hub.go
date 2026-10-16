@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nanatheblue/backtrack/protocol"
@@ -32,6 +33,9 @@ const (
 
 	// MaxTrackedMessages is the maximum number of recent messages kept in memory for session edit/delete.
 	MaxTrackedMessages = 4096
+
+	// dbOperationTimeout bounds async database persistence queries so hung connections cannot leak goroutines.
+	dbOperationTimeout = 5 * time.Second
 )
 
 // messageMeta tracks the sender and channel of a message sent in the current session.
@@ -93,6 +97,7 @@ type Hub struct {
 	messageOwners map[string]messageMeta      // owned by Run(); msgID -> messageMeta
 	messageOrder  []string                    // owned by Run(); FIFO list of msgIDs for bounded memory
 	msgRepo       message.Repository
+	dbWg          sync.WaitGroup
 
 	register   chan registerEvent
 	unregister chan *User
@@ -165,11 +170,13 @@ func (h *Hub) Run() {
 	}
 }
 
-// Stop shuts the hub down safely. Multiple calls will not panic.
+// Stop shuts the hub down safely and waits for in-flight DB operations to finish.
+// Multiple calls will not panic.
 func (h *Hub) Stop() {
 	h.stopOnce.Do(func() {
 		close(h.done)
 	})
+	h.dbWg.Wait()
 }
 
 // --- Event senders (called from connection goroutines) ---
@@ -327,6 +334,17 @@ func (h *Hub) handleUnregister(u *User) {
 			delete(h.messageOwners, id)
 		}
 	}
+	n := 0
+	for _, id := range h.messageOrder {
+		if _, exists := h.messageOwners[id]; exists {
+			h.messageOrder[n] = id
+			n++
+		}
+	}
+	for i := n; i < len(h.messageOrder); i++ {
+		h.messageOrder[i] = ""
+	}
+	h.messageOrder = h.messageOrder[:n]
 
 	roomsChanged := false
 	for room, members := range h.rooms {
@@ -375,14 +393,19 @@ func (h *Hub) handleChat(e chatEvent) {
 	h.messageOrder = append(h.messageOrder, msgID)
 	if len(h.messageOrder) > MaxTrackedMessages {
 		oldest := h.messageOrder[0]
+		h.messageOrder[0] = ""
 		h.messageOrder = h.messageOrder[1:]
 		delete(h.messageOwners, oldest)
 	}
 
 	// Persist message asynchronously
 	if h.msgRepo != nil {
+		h.dbWg.Add(1)
 		go func(m *message.Message) {
-			if err := h.msgRepo.Save(context.Background(), m); err != nil {
+			defer h.dbWg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+			defer cancel()
+			if err := h.msgRepo.Save(ctx, m); err != nil {
 				slog.Error("failed to persist message", "room", m.Room, "username", m.UserName, "error", err)
 			}
 		}(&message.Message{
@@ -434,8 +457,12 @@ func (h *Hub) handleChatEdit(e chatEditEvent) {
 
 	// Persist edit asynchronously
 	if h.msgRepo != nil {
+		h.dbWg.Add(1)
 		go func(msgID, r, body string, uid uint32) {
-			if err := h.msgRepo.Edit(context.Background(), &message.Message{ID: msgID, Room: r, Body: body}, uid); err != nil {
+			defer h.dbWg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+			defer cancel()
+			if err := h.msgRepo.Edit(ctx, &message.Message{ID: msgID, Room: r, Body: body}, uid); err != nil {
 				slog.Error("failed to persist message edit", "msg_id", msgID, "error", err)
 			}
 		}(e.msgID, room, e.body, e.from.ID)
@@ -480,11 +507,23 @@ func (h *Hub) handleChatDelete(e chatDeleteEvent) {
 	}
 
 	delete(h.messageOwners, e.msgID)
+	for i, id := range h.messageOrder {
+		if id == e.msgID {
+			copy(h.messageOrder[i:], h.messageOrder[i+1:])
+			h.messageOrder[len(h.messageOrder)-1] = ""
+			h.messageOrder = h.messageOrder[:len(h.messageOrder)-1]
+			break
+		}
+	}
 
 	// Persist delete asynchronously
 	if h.msgRepo != nil {
+		h.dbWg.Add(1)
 		go func(msgID string, uid uint32) {
-			if err := h.msgRepo.Delete(context.Background(), msgID, uid); err != nil {
+			defer h.dbWg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+			defer cancel()
+			if err := h.msgRepo.Delete(ctx, msgID, uid); err != nil {
 				slog.Error("failed to persist message delete", "msg_id", msgID, "error", err)
 			}
 		}(e.msgID, e.from.ID)
