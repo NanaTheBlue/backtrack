@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { JoinRoom } from '../../wailsjs/go/main/App';
+import { JoinRoom, LeaveRoom } from '../../wailsjs/go/main/App';
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
 
 interface UseRoomsOptions {
@@ -51,26 +51,41 @@ export function useRooms({ isOnline, onLog }: UseRoomsOptions) {
     onLog?.(`*** SWITCHED TO CHANNEL: #${room} ***`);
   };
 
-  const createRoom = async () => {
-    const roomName = prompt("ENTER NEW CHANNEL NAME (E.G. 'TEST-ROOM'):");
-    if (roomName && roomName.trim()) {
-      const clean = roomName.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
-      if (clean) {
-        if (!rooms.includes(clean)) {
-          setRooms((prev) => [...prev, clean]);
-        }
-        setActiveRoom(clean);
-        if (isOnline) {
-          try {
-            await JoinRoom(clean);
-          } catch (err) {
-            console.error('JoinRoom failed:', err);
-          }
-        }
-        onLog?.(`*** CHANNEL CREATED: #${clean} ***`);
-        onLog?.(`*** SWITCHED CONTEXT TO #${clean} ***`);
+  const createRoom = async (roomName: string) => {
+    const clean = roomName.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
+    if (!clean) return;
+
+    if (!rooms.includes(clean)) {
+      setRooms((prev) => [...prev, clean]);
+    }
+    setActiveRoom(clean);
+    if (isOnline) {
+      try {
+        await JoinRoom(clean);
+      } catch (err) {
+        console.error('JoinRoom failed:', err);
       }
     }
+    onLog?.(`*** CHANNEL CREATED: #${clean} ***`);
+    onLog?.(`*** SWITCHED CONTEXT TO #${clean} ***`);
+  };
+
+  const leaveRoom = async (room: string) => {
+    const target = room.trim().toUpperCase();
+    if (!target || target === 'GLOBAL') return;
+
+    setRooms((prev) => prev.filter((r) => r !== target));
+    if (activeRoom === target) {
+      setActiveRoom('GLOBAL');
+    }
+    if (isOnline) {
+      try {
+        await LeaveRoom(target);
+      } catch (err) {
+        console.error('LeaveRoom failed:', err);
+      }
+    }
+    onLog?.(`*** LEFT CHANNEL #${target} ***`, 'GLOBAL');
   };
 
   const resetRooms = () => {
@@ -83,6 +98,7 @@ export function useRooms({ isOnline, onLog }: UseRoomsOptions) {
     activeRoom,
     selectRoom,
     createRoom,
+    leaveRoom,
     resetRooms,
   };
 }

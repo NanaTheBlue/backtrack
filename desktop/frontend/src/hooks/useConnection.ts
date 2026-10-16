@@ -14,6 +14,9 @@ interface UseConnectionOptions {
 }
 
 export function useConnection(options?: UseConnectionOptions) {
+  const onLog = options?.onLog;
+  const onDisconnected = options?.onDisconnected;
+
   const [isOnline, setIsOnline] = useState<boolean>(false);
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -26,7 +29,7 @@ export function useConnection(options?: UseConnectionOptions) {
       if (!data.connected) {
         setPeers([]);
         setCurrentUserId(null);
-        options?.onDisconnected?.();
+        onDisconnected?.();
       }
     });
 
@@ -84,25 +87,25 @@ export function useConnection(options?: UseConnectionOptions) {
       EventsOff('user_joined');
       EventsOff('user_left');
     };
-  }, [options]);
+  }, [onDisconnected]);
 
   const toggleConnect = async (username: string, avatarId: number) => {
     if (isOnline) {
       await Disconnect();
-      options?.onLog?.('*** DISCONNECTED FROM SERVER ***');
+      onLog?.('*** DISCONNECTED FROM SERVER ***');
       return;
     }
 
     if (!username.trim()) {
-      options?.onLog?.('!!! IDENTIFICATION REQUIRED: SET USERNAME BEFORE CONNECTING !!!');
+      onLog?.('!!! IDENTIFICATION REQUIRED: SET USERNAME BEFORE CONNECTING !!!');
       return;
     }
 
-    options?.onLog?.(`*** DIALING TCP ${serverAddr} AS ${username} (AVATAR #${avatarId})... ***`);
+    onLog?.(`*** DIALING TCP ${serverAddr} AS ${username} (AVATAR #${avatarId})... ***`);
     try {
       await Connect(serverAddr, username, avatarId);
     } catch (err: any) {
-      options?.onLog?.(`!!! CONNECTION FAILED: ${err} !!!`);
+      onLog?.(`!!! CONNECTION FAILED: ${err} !!!`);
     }
   };
 

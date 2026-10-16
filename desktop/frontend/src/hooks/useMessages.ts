@@ -163,6 +163,15 @@ export function useMessages({ activeRoom, isOnline }: UseMessagesOptions) {
       appendMessage('!!! CANNOT EDIT: NOT CONNECTED TO TCP SERVER !!!');
       return;
     }
+    if (isRateLimited) {
+      appendMessage('!!! CANNOT EDIT: RATE LIMIT COOLDOWN ACTIVE. PLEASE WAIT A SECOND !!!');
+      return;
+    }
+    const byteLen = new TextEncoder().encode(newBody).length;
+    if (byteLen > 512) {
+      appendMessage(`!!! EDIT BLOCKED: MESSAGE EXCEEDS 512-BYTE LIMIT (${byteLen} BYTES) — PLEASE TRIM TEXT !!!`);
+      return;
+    }
     try {
       await EditMessage(msgId, room, newBody);
     } catch (err: any) {
