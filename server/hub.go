@@ -34,6 +34,9 @@ const (
 	// MaxTrackedMessages is the maximum number of recent messages kept in memory for session edit/delete.
 	MaxTrackedMessages = 4096
 
+	// DefaultHistoryLimit is the number of recent persisted messages sent when a user joins a channel.
+	DefaultHistoryLimit = 50
+
 	// dbOperationTimeout bounds async database persistence queries so hung connections cannot leak goroutines.
 	dbOperationTimeout = 5 * time.Second
 )
@@ -320,6 +323,48 @@ func (h *Hub) handleRegister(req registerEvent) {
 
 	// Announce RoomJoined for GLOBAL to members of GLOBAL except u
 	h.broadcastToRoom(protocol.DefaultRoom, protocol.MsgRoomJoined, protocol.RoomJoinedPayload(u.ID, protocol.DefaultRoom), u.ID)
+
+	// Send persisted room history for the default lobby if persistence is enabled
+	h.sendRoomHistory(u, protocol.DefaultRoom)
+}
+
+func (h *Hub) sendRoomHistory(u *User, room string) {
+	if h.msgRepo == nil {
+		return
+	}
+
+	// Snapshot active session message owners so we only attach live userIDs to messages
+	// sent during the current session (preventing recycled IDs from claiming old messages).
+	activeOwners := make(map[string]uint32, len(h.messageOwners))
+	for msgID, meta := range h.messageOwners {
+		if meta.room == room {
+			activeOwners[msgID] = meta.userID
+		}
+	}
+
+	h.dbWg.Add(1)
+	go func() {
+		defer h.dbWg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+		defer cancel()
+
+		recent, err := h.msgRepo.GetRecent(ctx, room, DefaultHistoryLimit)
+		if err != nil {
+			slog.Error("failed to fetch room history", "room", room, "username", u.Username, "error", err)
+			return
+		}
+		for _, m := range recent {
+			uid := uint32(0)
+			if ownerID, ok := activeOwners[m.ID]; ok && ownerID == m.UserID {
+				uid = m.UserID
+			}
+			r := m.Room
+			if r == "" {
+				r = room
+			}
+			u.send(protocol.MsgChatRecv, protocol.ChatRecvPayload(m.ID, uid, m.UserName, r, m.Body))
+		}
+	}()
 }
 
 func (h *Hub) handleUnregister(u *User) {
@@ -417,7 +462,7 @@ func (h *Hub) handleChat(e chatEvent) {
 		})
 	}
 
-	chatMSG := protocol.ChatRecvPayload(msgID, e.from.ID, room, e.body)
+	chatMSG := protocol.ChatRecvPayload(msgID, e.from.ID, e.from.Username, room, e.body)
 	h.broadcastToRoom(room, protocol.MsgChatRecv, chatMSG, 0)
 }
 
@@ -552,6 +597,7 @@ func (h *Hub) handleJoinRoom(e joinRoomEvent) {
 		newRoomCreated = true
 	}
 
+	joinedNow := false
 	if _, alreadyIn := members[e.user.ID]; !alreadyIn {
 		// Prevent a single user from joining too many rooms
 		joinedCount := 0
@@ -569,6 +615,7 @@ func (h *Hub) handleJoinRoom(e joinRoomEvent) {
 		}
 
 		members[e.user.ID] = e.user
+		joinedNow = true
 		// Announce to members of this room
 		h.broadcastToRoom(room, protocol.MsgRoomJoined, protocol.RoomJoinedPayload(e.user.ID, room), 0)
 	}
@@ -578,6 +625,10 @@ func (h *Hub) handleJoinRoom(e joinRoomEvent) {
 	} else {
 		// Send current room list to user so their directory reflects all rooms
 		e.user.send(protocol.MsgRoomList, protocol.RoomListPayload(h.activeRoomsList()))
+	}
+
+	if joinedNow {
+		h.sendRoomHistory(e.user, room)
 	}
 }
 

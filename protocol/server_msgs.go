@@ -18,23 +18,27 @@ func WelcomePayload(userID uint32) []byte {
 }
 
 // ChatRecvPayload builds the payload for MsgChatRecv
-// (msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room + body_len(2) + body).
-func ChatRecvPayload(msgID string, userID uint32, room string, body string) []byte {
+// (msg_id_len(1) + msg_id + user_id(4) + username_len(1) + username + room_len(1) + room + body_len(2) + body).
+func ChatRecvPayload(msgID string, userID uint32, username string, room string, body string) []byte {
 	if room == "" {
 		room = DefaultRoom
 	}
 	mid := []byte(msgID)
+	u := []byte(username)
 	r := []byte(room)
 	b := []byte(body)
 	if len(b) > MaxChatBodyLen {
 		b = b[:MaxChatBodyLen]
 	}
-	buf := make([]byte, 1+len(mid)+4+1+len(r)+2+len(b))
+	buf := make([]byte, 1+len(mid)+4+1+len(u)+1+len(r)+2+len(b))
 	buf[0] = byte(len(mid))
 	copy(buf[1:], mid)
 	offset := 1 + len(mid)
 	binary.BigEndian.PutUint32(buf[offset:offset+4], userID)
 	offset += 4
+	buf[offset] = byte(len(u))
+	copy(buf[offset+1:], u)
+	offset += 1 + len(u)
 	buf[offset] = byte(len(r))
 	copy(buf[offset+1:], r)
 	offset += 1 + len(r)
@@ -185,33 +189,40 @@ func ParseWelcome(payload []byte) (userID uint32, err error) {
 }
 
 // ParseChatRecv parses a MsgChatRecv payload
-// (msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room + body_len(2) + body).
-func ParseChatRecv(payload []byte) (msgID string, userID uint32, room string, body string, err error) {
+// (msg_id_len(1) + msg_id + user_id(4) + username_len(1) + username + room_len(1) + room + body_len(2) + body).
+func ParseChatRecv(payload []byte) (msgID string, userID uint32, username string, room string, body string, err error) {
 	if len(payload) < 2 {
-		return "", 0, "", "", fmt.Errorf("chat recv payload too short")
+		return "", 0, "", "", "", fmt.Errorf("chat recv payload too short")
 	}
 	midLen := int(payload[0])
 	if len(payload) < 1+midLen+4+1 {
-		return "", 0, "", "", fmt.Errorf("chat recv payload truncated")
+		return "", 0, "", "", "", fmt.Errorf("chat recv payload truncated")
 	}
 	msgID = string(payload[1 : 1+midLen])
 	offset := 1 + midLen
 	userID = binary.BigEndian.Uint32(payload[offset : offset+4])
 	offset += 4
+	userLen := int(payload[offset])
+	offset++
+	if len(payload) < offset+userLen+1 {
+		return "", 0, "", "", "", fmt.Errorf("chat recv payload truncated")
+	}
+	username = string(payload[offset : offset+userLen])
+	offset += userLen
 	roomLen := int(payload[offset])
 	offset++
 	if len(payload) < offset+roomLen+2 {
-		return "", 0, "", "", fmt.Errorf("chat recv payload truncated")
+		return "", 0, "", "", "", fmt.Errorf("chat recv payload truncated")
 	}
 	room = string(payload[offset : offset+roomLen])
 	offset += roomLen
 	bodyLen := int(binary.BigEndian.Uint16(payload[offset : offset+2]))
 	offset += 2
 	if len(payload) < offset+bodyLen {
-		return "", 0, "", "", fmt.Errorf("chat recv payload truncated")
+		return "", 0, "", "", "", fmt.Errorf("chat recv payload truncated")
 	}
 	body = string(payload[offset : offset+bodyLen])
-	return msgID, userID, room, body, nil
+	return msgID, userID, username, room, body, nil
 }
 
 // ParseUserJoined parses a MsgUserJoined payload.

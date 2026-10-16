@@ -300,15 +300,21 @@ func (a *App) readLoop(conn net.Conn) {
 			}
 
 		case protocol.MsgChatRecv:
-			msgID, uid, room, body, err := protocol.ParseChatRecv(msg.Payload)
+			msgID, uid, username, room, body, err := protocol.ParseChatRecv(msg.Payload)
 			if err == nil {
 				a.mu.Lock()
-				sender := a.users[uid]
-				if sender.Username == "" {
-					if uid == a.userID {
+				var sender UserData
+				if uid != 0 {
+					sender = a.users[uid]
+					if sender.Username == "" && uid == a.userID {
 						sender = UserData{Username: a.username, AvatarID: a.avatarID}
+					}
+				}
+				if sender.Username == "" {
+					if username != "" {
+						sender.Username = username
 					} else {
-						sender = UserData{Username: fmt.Sprintf("USER#%d", uid), AvatarID: 0}
+						sender.Username = fmt.Sprintf("USER#%d", uid)
 					}
 				}
 				a.mu.Unlock()

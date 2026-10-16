@@ -28,7 +28,7 @@ const (
 // Server → Client
 const (
 	MsgWelcome        byte = 0x80 // user_id(4)
-	MsgChatRecv       byte = 0x81 // msg_id_len(1) + msg_id + user_id(4) + room_len(1) + room + body_len(2) + body
+	MsgChatRecv       byte = 0x81 // msg_id_len(1) + msg_id + user_id(4) + username_len(1) + username + room_len(1) + room + body_len(2) + body
 	MsgUserJoined     byte = 0x82 // user_id(4) + avatar_id(2) + username_len(1) + username
 	MsgUserLeft       byte = 0x83 // user_id(4)
 	MsgUserInfo       byte = 0x84 // user_id(4) + avatar_id(2) + status(1) + username_len(1) + username

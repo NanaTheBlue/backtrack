@@ -40,6 +40,9 @@ export function useMessages({ activeRoom, isOnline }: UseMessagesOptions) {
           : { ...msg, id: msg.id || nextMsgId(), room: targetRoom };
 
       const existing = prev[targetRoom] || [];
+      if (!item.isSystem && item.id && existing.some((m) => m.id === item.id)) {
+        return prev;
+      }
       const updated =
         existing.length >= MAX_MESSAGES_PER_ROOM
           ? [...existing.slice(existing.length - MAX_MESSAGES_PER_ROOM + 1), item]
