@@ -103,6 +103,9 @@ export default function TerminalScreen({
             item.userId === currentUserId;
 
           const avatar = getAvatar(item.avatarId);
+          const editByteLen = editingId === item.id ? new TextEncoder().encode(editText).length : 0;
+          const isEditOverLimit = editByteLen > 512;
+
           return (
             <div
               key={key}
@@ -110,9 +113,11 @@ export default function TerminalScreen({
                 if (isOwn && !item.isDeleted && item.id) {
                   e.preventDefault();
                   e.stopPropagation();
+                  const clampedX = Math.min(e.clientX, window.innerWidth - 150);
+                  const clampedY = Math.min(e.clientY, window.innerHeight - 90);
                   setContextMenu({
-                    x: e.clientX,
-                    y: e.clientY,
+                    x: Math.max(8, clampedX),
+                    y: Math.max(8, clampedY),
                     message: item,
                   });
                 }
@@ -150,6 +155,7 @@ export default function TerminalScreen({
                     onChange={(e) => setEditText(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
+                        if (isEditOverLimit) return;
                         if (editText.trim() && editText !== item.text && onEditMessage && item.id) {
                           onEditMessage(String(item.id), item.room || activeRoom, editText);
                         }
@@ -159,12 +165,20 @@ export default function TerminalScreen({
                       }
                     }}
                     autoFocus
-                    className="bg-black/90 border border-green-400 text-green-200 px-2 py-0.5 text-sm font-mono outline-none box-glow w-full"
+                    className={`bg-black/90 border px-2 py-0.5 text-sm font-mono outline-none w-full ${
+                      isEditOverLimit
+                        ? 'border-red-500 text-red-200'
+                        : 'border-green-400 text-green-200 box-glow'
+                    }`}
                   />
                   <div className="flex items-center gap-2 text-[10px] text-green-500 font-mono select-none">
                     <span>[ENTER] SAVE</span>
                     <span>•</span>
                     <span>[ESC] CANCEL</span>
+                    <span>•</span>
+                    <span className={isEditOverLimit ? 'text-red-400 font-bold' : ''}>
+                      [{editByteLen}/512B]
+                    </span>
                   </div>
                 </div>
               ) : (

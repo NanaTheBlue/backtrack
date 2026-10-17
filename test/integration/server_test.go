@@ -130,7 +130,7 @@ func TestIntegration_MultiRoomRoutingAndIsolation(t *testing.T) {
 	if msg.Type != protocol.MsgChatRecv {
 		t.Fatalf("Expected MsgChatRecv, got 0x%02x", msg.Type)
 	}
-	_, _, room, body, _ := protocol.ParseChatRecv(msg.Payload)
+	_, _, _, room, body, _ := protocol.ParseChatRecv(msg.Payload)
 	if room != "SECRET-ROOM" || body != "confidential message" {
 		t.Errorf("Alice received unexpected chat: room=%q body=%q", room, body)
 	}
@@ -139,7 +139,7 @@ func TestIntegration_MultiRoomRoutingAndIsolation(t *testing.T) {
 	bob.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	msg, err = protocol.ReadMessage(bob)
 	if err == nil && msg.Type == protocol.MsgChatRecv {
-		_, _, bRoom, bBody, _ := protocol.ParseChatRecv(msg.Payload)
+		_, _, _, bRoom, bBody, _ := protocol.ParseChatRecv(msg.Payload)
 		t.Fatalf("Leak detected! Bob received message from room %q: %q", bRoom, bBody)
 	}
 }
@@ -187,9 +187,9 @@ func TestIntegration_ChatEditAndDelete(t *testing.T) {
 	if msg.Type != protocol.MsgChatRecv {
 		t.Fatalf("Expected MsgChatRecv, got 0x%02x", msg.Type)
 	}
-	msgID, uid, room, body, err := protocol.ParseChatRecv(msg.Payload)
-	if err != nil || uid != aliceUID || room != "GLOBAL" || body != "original message text" {
-		t.Fatalf("Chat recv mismatch: msgID=%q, uid=%d, room=%q, body=%q, err=%v", msgID, uid, room, body, err)
+	msgID, uid, uname, room, body, err := protocol.ParseChatRecv(msg.Payload)
+	if err != nil || uid != aliceUID || uname != "ALICE" || room != "GLOBAL" || body != "original message text" {
+		t.Fatalf("Chat recv mismatch: msgID=%q, uid=%d, uname=%q, room=%q, body=%q, err=%v", msgID, uid, uname, room, body, err)
 	}
 
 	// Bob also reads MsgChatRecv

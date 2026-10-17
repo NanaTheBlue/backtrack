@@ -5,6 +5,8 @@ import (
 	"flag"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	repository "github.com/nanatheblue/backtrack/repository/db"
 	"github.com/nanatheblue/backtrack/repository/message"
@@ -21,10 +23,13 @@ func main() {
 		"PostgreSQL connection string (defaults to $DATABASE_URL); leave empty to run without message persistence")
 	flag.Parse()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Persistence is optional: without a database the server runs fully in memory.
 	var repos []message.Repository
 	if *dbURL != "" {
-		dbpool, err := repository.NewPostgresPool(context.Background(), *dbURL)
+		dbpool, err := repository.NewPostgresPool(ctx, *dbURL)
 		if err != nil {
 			slog.Error("failed to connect to database", "error", err)
 			os.Exit(1)
@@ -42,6 +47,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer srv.Close()
+
+	go func() {
+		<-ctx.Done()
+		slog.Info("shutting down server")
+		_ = srv.Close()
+	}()
 
 	err = srv.Run()
 	if err != nil {

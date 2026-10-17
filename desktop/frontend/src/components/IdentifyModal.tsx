@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { RETRO_AVATARS } from '../utils/avatars';
 
 interface IdentifyModalProps {
@@ -21,6 +21,14 @@ export default function IdentifyModal({
   const [val, setVal] = useState(initialUsername || '');
   const [selectedAvatarId, setSelectedAvatarId] = useState<number>(initialAvatarId || 1);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+      setVal(initialUsername || '');
+      setSelectedAvatarId(initialAvatarId || 1);
+      setError('');
+    }
+  }, [isOpen, initialUsername, initialAvatarId]);
 
   if (!isOpen) return null;
 

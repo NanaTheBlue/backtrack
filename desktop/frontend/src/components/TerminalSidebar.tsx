@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { getAvatar } from '../utils/avatars';
 
 interface Peer {
@@ -10,7 +11,8 @@ interface TerminalSidebarProps {
   activeRoom: string;
   rooms: string[];
   onSelectRoom: (room: string) => void;
-  onCreateRoom: () => void;
+  onCreateRoom: (roomName: string) => void;
+  onLeaveRoom?: (room: string) => void;
   onOpenSettings: () => void;
   peers: Peer[];
   isOnline: boolean;
@@ -22,11 +24,25 @@ export default function TerminalSidebar({
   rooms,
   onSelectRoom,
   onCreateRoom,
+  onLeaveRoom,
   onOpenSettings,
   peers,
   isOnline,
   onConnectToggle,
 }: TerminalSidebarProps) {
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  const [newRoomInput, setNewRoomInput] = useState('');
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = newRoomInput.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
+    if (clean) {
+      onCreateRoom(clean);
+    }
+    setNewRoomInput('');
+    setIsCreatingRoom(false);
+  };
+
   return (
     <aside className="w-64 border-2 border-green-400 p-3.5 box-glow bg-black/80 flex flex-col justify-between shrink-0 select-none">
       <div className="space-y-4">
@@ -55,32 +71,82 @@ export default function TerminalSidebar({
           <div className="space-y-1.5">
             {rooms.map((room) => {
               const isActive = activeRoom === room;
+              const isGlobal = room === 'GLOBAL';
               return (
-                <button
-                  key={room}
-                  onClick={() => onSelectRoom(room)}
-                  className={`w-full text-left px-2.5 py-1.5 text-xs font-mono tracking-wider uppercase transition-all flex items-center justify-between cursor-pointer ${
-                    isActive
-                      ? 'bg-green-400 text-black font-extrabold shadow-[0_0_12px_rgba(74,222,128,0.7)]'
-                      : 'border border-green-500/30 text-green-300 hover:border-green-400 hover:bg-green-950/60'
-                  }`}
-                >
-                  <span className="truncate">
-                    {isActive ? '► ' : '  '}#{room}
-                  </span>
-                  {isActive && <span className="text-[10px] animate-pulse">●</span>}
-                </button>
+                <div key={room} className="flex items-center gap-1">
+                  <button
+                    onClick={() => onSelectRoom(room)}
+                    className={`flex-1 min-w-0 text-left px-2.5 py-1.5 text-xs font-mono tracking-wider uppercase transition-all flex items-center justify-between cursor-pointer ${
+                      isActive
+                        ? 'bg-green-400 text-black font-extrabold shadow-[0_0_12px_rgba(74,222,128,0.7)]'
+                        : 'border border-green-500/30 text-green-300 hover:border-green-400 hover:bg-green-950/60'
+                    }`}
+                  >
+                    <span className="truncate">
+                      {isActive ? '► ' : '  '}#{room}
+                    </span>
+                    {isActive && <span className="text-[10px] animate-pulse">●</span>}
+                  </button>
+                  {!isGlobal && onLeaveRoom && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onLeaveRoom(room);
+                      }}
+                      title={`Leave #${room}`}
+                      className="px-1.5 py-1.5 text-[10px] font-mono border border-green-500/30 text-green-500 hover:border-red-400 hover:bg-red-950/50 hover:text-red-300 transition-colors cursor-pointer shrink-0"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
 
-          {/* Create Room Button */}
-          <button
-            onClick={onCreateRoom}
-            className="w-full mt-2.5 py-1.5 px-2 border-2 border-dashed border-green-400/80 hover:border-solid hover:bg-green-400 hover:text-black text-green-300 text-xs font-bold tracking-widest uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-          >
-            <span>[+]</span> CREATE ROOM
-          </button>
+          {/* Inline Create Room Input or Button */}
+          {isCreatingRoom ? (
+            <form onSubmit={handleCreateSubmit} className="mt-2.5 space-y-1">
+              <div className="flex items-center gap-1 border-2 border-green-400 bg-black px-2 py-1">
+                <span className="text-green-400 font-bold text-xs">#</span>
+                <input
+                  type="text"
+                  value={newRoomInput}
+                  onChange={(e) => setNewRoomInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setNewRoomInput('');
+                      setIsCreatingRoom(false);
+                    }
+                  }}
+                  placeholder="CHANNEL-NAME"
+                  maxLength={24}
+                  autoFocus
+                  className="flex-1 min-w-0 bg-transparent border-none outline-none text-green-200 font-mono text-xs tracking-wider placeholder-green-800"
+                />
+              </div>
+              <div className="flex justify-between text-[9px] text-green-500 font-mono px-0.5">
+                <span>[↵] JOIN/CREATE</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewRoomInput('');
+                    setIsCreatingRoom(false);
+                  }}
+                  className="hover:text-green-300 cursor-pointer"
+                >
+                  [ESC] CANCEL
+                </button>
+              </div>
+            </form>
+          ) : (
+            <button
+              onClick={() => setIsCreatingRoom(true)}
+              className="w-full mt-2.5 py-1.5 px-2 border-2 border-dashed border-green-400/80 hover:border-solid hover:bg-green-400 hover:text-black text-green-300 text-xs font-bold tracking-widest uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <span>[+]</span> CREATE ROOM
+            </button>
+          )}
         </div>
 
         {/* Section: Active Users from TCP Protocol */}

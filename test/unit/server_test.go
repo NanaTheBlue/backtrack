@@ -1,13 +1,71 @@
 package unit_test
 
 import (
+	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nanatheblue/backtrack/protocol"
+	"github.com/nanatheblue/backtrack/repository/message"
 	"github.com/nanatheblue/backtrack/server"
 )
+
+type mockMessageRepo struct {
+	mu       sync.Mutex
+	getDelay time.Duration
+	messages []message.Message
+}
+
+func (m *mockMessageRepo) Save(_ context.Context, msg *message.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, *msg)
+	return nil
+}
+
+func (m *mockMessageRepo) GetRecent(_ context.Context, room string, limit int) ([]message.Message, error) {
+	if m.getDelay > 0 {
+		time.Sleep(m.getDelay)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []message.Message
+	for _, msg := range m.messages {
+		if msg.Room == room {
+			res = append(res, msg)
+		}
+	}
+	if len(res) > limit {
+		res = res[len(res)-limit:]
+	}
+	return res, nil
+}
+
+func (m *mockMessageRepo) Delete(_ context.Context, messageID string, userID uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, msg := range m.messages {
+		if msg.ID == messageID && msg.UserID == userID {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("not found")
+}
+
+func (m *mockMessageRepo) Edit(_ context.Context, edited *message.Message, userID uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, msg := range m.messages {
+		if msg.ID == edited.ID && msg.UserID == userID {
+			m.messages[i].Body = edited.Body
+			return nil
+		}
+	}
+	return fmt.Errorf("not found")
+}
 
 func TestUnit_HubRegistrationAndWelcome(t *testing.T) {
 	hub := server.NewHub()
@@ -239,5 +297,124 @@ func TestUnit_HubChatRequiresRoomMembership(t *testing.T) {
 		t.Errorf("Expected descriptive error message, got %q (err=%v)", errMsg, err)
 	}
 }
+
+func TestUnit_HubRoomHistoryOnJoin(t *testing.T) {
+	repo := &mockMessageRepo{
+		messages: []message.Message{
+			{
+				ID:       "old-msg-1",
+				Room:     "GLOBAL",
+				UserID:   1, // Old session ID that will collide with new user ID 1
+				UserName: "ANCIENT-OP",
+				Body:     "hello from a previous session",
+			},
+		},
+	}
+
+	hub := server.NewHub(repo)
+	go hub.Run()
+	defer hub.Stop()
+
+	u1, c1 := server.NewTestUser(1, "NEW-OP", 1)
+	defer u1.Close()
+	defer c1.Close()
+
+	if err := hub.Register(u1); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	c1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	// Drain Welcome & RoomList
+	protocol.ReadMessage(c1)
+	protocol.ReadMessage(c1)
+
+	// Receive persisted history message for GLOBAL
+	msg, err := protocol.ReadMessage(c1)
+	if err != nil {
+		t.Fatalf("Expected historical MsgChatRecv, got err: %v", err)
+	}
+	if msg.Type != protocol.MsgChatRecv {
+		t.Fatalf("Expected MsgChatRecv (0x81), got 0x%02x", msg.Type)
+	}
+	mid, uid, uname, room, body, err := protocol.ParseChatRecv(msg.Payload)
+	if err != nil {
+		t.Fatalf("ParseChatRecv failed: %v", err)
+	}
+	// Crucial check: uid must be 0 because "old-msg-1" was not sent in the current session,
+	// preventing NEW-OP (uid=1) from falsely owning ANCIENT-OP's message!
+	if mid != "old-msg-1" || uid != 0 || uname != "ANCIENT-OP" || room != "GLOBAL" || body != "hello from a previous session" {
+		t.Errorf("Unexpected history message: mid=%q uid=%d uname=%q room=%q body=%q", mid, uid, uname, room, body)
+	}
+}
+
+func TestUnit_HubRoomHistoryOrderingAndDeduplication(t *testing.T) {
+	repo := &mockMessageRepo{
+		getDelay: 40 * time.Millisecond,
+		messages: []message.Message{
+			{
+				ID:       "hist-1",
+				Room:     "RETRO",
+				UserID:   99,
+				UserName: "ARCHIVIST",
+				Body:     "first historical message",
+			},
+		},
+	}
+
+	hub := server.NewHub(repo)
+	go hub.Run()
+	defer hub.Stop()
+
+	u1, c1 := server.NewTestUser(1, "SENDER", 1)
+	defer u1.Close()
+	defer c1.Close()
+	u2, c2 := server.NewTestUser(2, "JOINER", 2)
+	defer u2.Close()
+	defer c2.Close()
+
+	if err := hub.Register(u1); err != nil {
+		t.Fatalf("Register u1 failed: %v", err)
+	}
+	if err := hub.Register(u2); err != nil {
+		t.Fatalf("Register u2 failed: %v", err)
+	}
+
+	c1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	c2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	// u1 creates and joins RETRO, waits for history to finish
+	hub.JoinRoom(u1, "RETRO")
+	time.Sleep(60 * time.Millisecond)
+
+	// Now u2 joins RETRO; while u2's 40ms GetRecent query is in-flight, u1 sends a live message in RETRO
+	hub.JoinRoom(u2, "RETRO")
+	hub.Chat(u1, "RETRO", "live message during history load")
+
+	// Read all MsgChatRecv messages for RETRO received by u2
+	var receivedBodies []string
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		c2.SetReadDeadline(time.Now().Add(80 * time.Millisecond))
+		msg, err := protocol.ReadMessage(c2)
+		if err != nil {
+			break
+		}
+		if msg.Type == protocol.MsgChatRecv {
+			_, _, _, room, body, err := protocol.ParseChatRecv(msg.Payload)
+			if err == nil && room == "RETRO" {
+				receivedBodies = append(receivedBodies, body)
+			}
+		}
+	}
+
+	if len(receivedBodies) != 2 {
+		t.Fatalf("Expected exactly 2 RETRO messages (no duplicates), got %d: %v", len(receivedBodies), receivedBodies)
+	}
+	if receivedBodies[0] != "first historical message" || receivedBodies[1] != "live message during history load" {
+		t.Errorf("Expected historical message before live message, got: %v", receivedBodies)
+	}
+}
+
+
 
 

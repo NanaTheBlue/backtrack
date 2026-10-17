@@ -40,6 +40,9 @@ export function useMessages({ activeRoom, isOnline }: UseMessagesOptions) {
           : { ...msg, id: msg.id || nextMsgId(), room: targetRoom };
 
       const existing = prev[targetRoom] || [];
+      if (!item.isSystem && item.id && existing.some((m) => m.id === item.id)) {
+        return prev;
+      }
       const updated =
         existing.length >= MAX_MESSAGES_PER_ROOM
           ? [...existing.slice(existing.length - MAX_MESSAGES_PER_ROOM + 1), item]
@@ -158,6 +161,15 @@ export function useMessages({ activeRoom, isOnline }: UseMessagesOptions) {
   const editMessage = async (msgId: string, room: string, newBody: string) => {
     if (!isOnline) {
       appendMessage('!!! CANNOT EDIT: NOT CONNECTED TO TCP SERVER !!!');
+      return;
+    }
+    if (isRateLimited) {
+      appendMessage('!!! CANNOT EDIT: RATE LIMIT COOLDOWN ACTIVE. PLEASE WAIT A SECOND !!!');
+      return;
+    }
+    const byteLen = new TextEncoder().encode(newBody).length;
+    if (byteLen > 512) {
+      appendMessage(`!!! EDIT BLOCKED: MESSAGE EXCEEDS 512-BYTE LIMIT (${byteLen} BYTES) — PLEASE TRIM TEXT !!!`);
       return;
     }
     try {

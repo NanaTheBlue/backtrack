@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/binary"
 	"fmt"
 )
 
@@ -71,15 +70,11 @@ func EncodeIdentify(username string, avatarID uint16) ([]byte, error) {
 	if err := ValidateUsername(username); err != nil {
 		return nil, err
 	}
-	nameLen := len(username)
-
 	// Payload layout: nameLen (1) + username (N) + avatarID (2)
-	payload := make([]byte, 1+nameLen+2)
-	payload[0] = byte(nameLen)
-	copy(payload[1:], username)
-	binary.BigEndian.PutUint16(payload[1+nameLen:], avatarID)
-
-	return payload, nil
+	w := newWriter(1 + len(username) + 2)
+	w.writeStr8(username)
+	w.writeUint16(avatarID)
+	return w.buf, nil
 }
 
 // EncodeChatSend encodes a chat message payload (room_len(1) + room + body_len(2) + body).
@@ -90,17 +85,13 @@ func EncodeChatSend(room string, body string) ([]byte, error) {
 	if err := ValidateRoomName(room); err != nil {
 		return nil, err
 	}
-	b := []byte(body)
-	if len(b) > MaxChatBodyLen {
-		return nil, fmt.Errorf("message body too long: %d bytes (max %d)", len(b), MaxChatBodyLen)
+	if len(body) > MaxChatBodyLen {
+		return nil, fmt.Errorf("message body too long: %d bytes (max %d)", len(body), MaxChatBodyLen)
 	}
-	r := []byte(room)
-	payload := make([]byte, 1+len(r)+2+len(b))
-	payload[0] = byte(len(r))
-	copy(payload[1:], r)
-	binary.BigEndian.PutUint16(payload[1+len(r):], uint16(len(b)))
-	copy(payload[1+len(r)+2:], b)
-	return payload, nil
+	w := newWriter(1 + len(room) + 2 + len(body))
+	w.writeStr8(room)
+	w.writeStr16(body)
+	return w.buf, nil
 }
 
 // EncodeJoinRoom encodes a join room payload (room_len(1) + room).
@@ -108,11 +99,9 @@ func EncodeJoinRoom(room string) ([]byte, error) {
 	if err := ValidateRoomName(room); err != nil {
 		return nil, err
 	}
-	r := []byte(room)
-	payload := make([]byte, 1+len(r))
-	payload[0] = byte(len(r))
-	copy(payload[1:], r)
-	return payload, nil
+	w := newWriter(1 + len(room))
+	w.writeStr8(room)
+	return w.buf, nil
 }
 
 // EncodeLeaveRoom encodes a leave room payload (room_len(1) + room).
@@ -120,11 +109,9 @@ func EncodeLeaveRoom(room string) ([]byte, error) {
 	if err := ValidateRoomName(room); err != nil {
 		return nil, err
 	}
-	r := []byte(room)
-	payload := make([]byte, 1+len(r))
-	payload[0] = byte(len(r))
-	copy(payload[1:], r)
-	return payload, nil
+	w := newWriter(1 + len(room))
+	w.writeStr8(room)
+	return w.buf, nil
 }
 
 // EncodeSetPresence encodes a status byte payload.
@@ -143,20 +130,14 @@ func EncodeChatEdit(msgID string, room string, body string) ([]byte, error) {
 	if err := ValidateRoomName(room); err != nil {
 		return nil, err
 	}
-	b := []byte(body)
-	if len(b) > MaxChatBodyLen {
-		return nil, fmt.Errorf("message body too long: %d bytes (max %d)", len(b), MaxChatBodyLen)
+	if len(body) > MaxChatBodyLen {
+		return nil, fmt.Errorf("message body too long: %d bytes (max %d)", len(body), MaxChatBodyLen)
 	}
-	mid := []byte(msgID)
-	r := []byte(room)
-	payload := make([]byte, 1+len(mid)+1+len(r)+2+len(b))
-	payload[0] = byte(len(mid))
-	copy(payload[1:], mid)
-	payload[1+len(mid)] = byte(len(r))
-	copy(payload[1+len(mid)+1:], r)
-	binary.BigEndian.PutUint16(payload[1+len(mid)+1+len(r):], uint16(len(b)))
-	copy(payload[1+len(mid)+1+len(r)+2:], b)
-	return payload, nil
+	w := newWriter(1 + len(msgID) + 1 + len(room) + 2 + len(body))
+	w.writeStr8(msgID)
+	w.writeStr8(room)
+	w.writeStr16(body)
+	return w.buf, nil
 }
 
 // EncodeChatDelete encodes a chat delete payload (msg_id_len(1) + msg_id + room_len(1) + room).
@@ -170,69 +151,49 @@ func EncodeChatDelete(msgID string, room string) ([]byte, error) {
 	if err := ValidateRoomName(room); err != nil {
 		return nil, err
 	}
-	mid := []byte(msgID)
-	r := []byte(room)
-	payload := make([]byte, 1+len(mid)+1+len(r))
-	payload[0] = byte(len(mid))
-	copy(payload[1:], mid)
-	payload[1+len(mid)] = byte(len(r))
-	copy(payload[1+len(mid)+1:], r)
-	return payload, nil
+	w := newWriter(1 + len(msgID) + 1 + len(room))
+	w.writeStr8(msgID)
+	w.writeStr8(room)
+	return w.buf, nil
 }
 
 // --- Payload parsers (client → server) ---
 
 // ParseIdentify parses a MsgIdentify payload.
 func ParseIdentify(payload []byte) (username string, avatarID uint16, err error) {
-	if len(payload) < 3 {
-		return "", 0, fmt.Errorf("identify payload too short: %d bytes", len(payload))
+	r := newReader(payload)
+	username = r.readStr8()
+	avatarID = r.readUint16()
+	if r.err != nil {
+		return "", 0, r.err
 	}
-	nameLen := int(payload[0])
-	if len(payload) < 1+nameLen+2 {
-		return "", 0, fmt.Errorf("identify payload truncated")
-	}
-	username = string(payload[1 : 1+nameLen])
 	if err := ValidateUsername(username); err != nil {
 		return "", 0, err
 	}
-	avatarID = binary.BigEndian.Uint16(payload[1+nameLen : 1+nameLen+2])
 	return username, avatarID, nil
 }
 
 // ParseChatSend parses a MsgChatSend payload (room_len(1) + room + body_len(2) + body).
 func ParseChatSend(payload []byte) (room string, body string, err error) {
-	if len(payload) < 3 {
-		return "", "", fmt.Errorf("chat send payload too short: %d bytes", len(payload))
+	r := newReader(payload)
+	room = r.readStr8()
+	body = r.readStr16(MaxChatBodyLen)
+	if r.err != nil {
+		return "", "", r.err
 	}
-	roomLen := int(payload[0])
-	if len(payload) < 1+roomLen+2 {
-		return "", "", fmt.Errorf("chat send payload truncated")
-	}
-	room = string(payload[1 : 1+roomLen])
 	if err := ValidateRoomName(room); err != nil {
 		return "", "", err
 	}
-	bodyLen := int(binary.BigEndian.Uint16(payload[1+roomLen : 1+roomLen+2]))
-	if bodyLen > MaxChatBodyLen {
-		return "", "", fmt.Errorf("chat message body exceeds limit: %d bytes (max %d)", bodyLen, MaxChatBodyLen)
-	}
-	if len(payload) < 1+roomLen+2+bodyLen {
-		return "", "", fmt.Errorf("chat send payload truncated")
-	}
-	body = string(payload[1+roomLen+2 : 1+roomLen+2+bodyLen])
 	return room, body, nil
 }
 
 // ParseJoinRoom parses a MsgJoinRoom payload.
 func ParseJoinRoom(payload []byte) (room string, err error) {
-	if len(payload) < 1 {
-		return "", fmt.Errorf("join room payload too short")
+	r := newReader(payload)
+	room = r.readStr8()
+	if r.err != nil {
+		return "", r.err
 	}
-	roomLen := int(payload[0])
-	if len(payload) < 1+roomLen {
-		return "", fmt.Errorf("join room payload truncated")
-	}
-	room = string(payload[1 : 1+roomLen])
 	if err := ValidateRoomName(room); err != nil {
 		return "", err
 	}
@@ -241,14 +202,11 @@ func ParseJoinRoom(payload []byte) (room string, err error) {
 
 // ParseLeaveRoom parses a MsgLeaveRoom payload.
 func ParseLeaveRoom(payload []byte) (room string, err error) {
-	if len(payload) < 1 {
-		return "", fmt.Errorf("leave room payload too short")
+	r := newReader(payload)
+	room = r.readStr8()
+	if r.err != nil {
+		return "", r.err
 	}
-	roomLen := int(payload[0])
-	if len(payload) < 1+roomLen {
-		return "", fmt.Errorf("leave room payload truncated")
-	}
-	room = string(payload[1 : 1+roomLen])
 	if err := ValidateRoomName(room); err != nil {
 		return "", err
 	}
@@ -257,71 +215,43 @@ func ParseLeaveRoom(payload []byte) (room string, err error) {
 
 // ParseSetPresence parses a MsgSetPresence payload.
 func ParseSetPresence(payload []byte) (status byte, err error) {
-	if len(payload) < 1 {
-		return 0, fmt.Errorf("set presence payload too short")
-	}
-	return payload[0], nil
+	r := newReader(payload)
+	status = r.readByte()
+	return status, r.err
 }
 
 // ParseChatEdit parses a MsgChatEdit payload (msg_id_len(1) + msg_id + room_len(1) + room + body_len(2) + body).
 func ParseChatEdit(payload []byte) (msgID string, room string, body string, err error) {
-	if len(payload) < 2 {
-		return "", "", "", fmt.Errorf("chat edit payload too short")
+	r := newReader(payload)
+	msgID = r.readStr8()
+	room = r.readStr8()
+	body = r.readStr16(MaxChatBodyLen)
+	if r.err != nil {
+		return "", "", "", r.err
 	}
-	midLen := int(payload[0])
-	if len(payload) < 1+midLen+1 {
-		return "", "", "", fmt.Errorf("chat edit payload truncated")
-	}
-	msgID = string(payload[1 : 1+midLen])
 	if err := ValidateMsgID(msgID); err != nil {
 		return "", "", "", err
 	}
-
-	offset := 1 + midLen
-	roomLen := int(payload[offset])
-	if len(payload) < offset+1+roomLen+2 {
-		return "", "", "", fmt.Errorf("chat edit payload truncated")
-	}
-	room = string(payload[offset+1 : offset+1+roomLen])
 	if err := ValidateRoomName(room); err != nil {
 		return "", "", "", err
 	}
-
-	offset += 1 + roomLen
-	bodyLen := int(binary.BigEndian.Uint16(payload[offset : offset+2]))
-	if bodyLen > MaxChatBodyLen {
-		return "", "", "", fmt.Errorf("chat message body exceeds limit: %d bytes (max %d)", bodyLen, MaxChatBodyLen)
-	}
-	offset += 2
-	if len(payload) < offset+bodyLen {
-		return "", "", "", fmt.Errorf("chat edit payload truncated")
-	}
-	body = string(payload[offset : offset+bodyLen])
 	return msgID, room, body, nil
 }
 
 // ParseChatDelete parses a MsgChatDelete payload (msg_id_len(1) + msg_id + room_len(1) + room).
 func ParseChatDelete(payload []byte) (msgID string, room string, err error) {
-	if len(payload) < 2 {
-		return "", "", fmt.Errorf("chat delete payload too short")
+	r := newReader(payload)
+	msgID = r.readStr8()
+	room = r.readStr8()
+	if r.err != nil {
+		return "", "", r.err
 	}
-	midLen := int(payload[0])
-	if len(payload) < 1+midLen+1 {
-		return "", "", fmt.Errorf("chat delete payload truncated")
-	}
-	msgID = string(payload[1 : 1+midLen])
 	if err := ValidateMsgID(msgID); err != nil {
 		return "", "", err
 	}
-
-	offset := 1 + midLen
-	roomLen := int(payload[offset])
-	if len(payload) < offset+1+roomLen {
-		return "", "", fmt.Errorf("chat delete payload truncated")
-	}
-	room = string(payload[offset+1 : offset+1+roomLen])
 	if err := ValidateRoomName(room); err != nil {
 		return "", "", err
 	}
 	return msgID, room, nil
 }
+

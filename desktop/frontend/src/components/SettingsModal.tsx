@@ -49,7 +49,7 @@ export default function SettingsModal({
               type="text"
               value={username}
               maxLength={24}
-              onChange={(e) => setUsername(e.target.value.toUpperCase())}
+              onChange={(e) => setUsername(e.target.value.toUpperCase().replace(/[^A-Z0-9_.-]/g, ''))}
               placeholder="YOUR CALLSIGN"
               className="w-full bg-black border-2 border-green-500/80 p-1.5 text-green-200 outline-none focus:border-green-300"
             />

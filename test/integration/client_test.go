@@ -111,9 +111,9 @@ func TestIntegration_SimulatedClientLifecycle(t *testing.T) {
 	if msg.Type != protocol.MsgChatRecv {
 		t.Fatalf("Expected MsgChatRecv (0x81), got 0x%02x", msg.Type)
 	}
-	cMsgID, cUID, cRoom, body, err := protocol.ParseChatRecv(msg.Payload)
-	if err != nil || cMsgID == "" || cUID != uid || cRoom != "RETRO" || body != "testing 1-2-3" {
-		t.Fatalf("Chat recv mismatch: msgID=%q, uid=%d, room=%q, body=%q, err=%v", cMsgID, cUID, cRoom, body, err)
+	cMsgID, cUID, cUser, cRoom, body, err := protocol.ParseChatRecv(msg.Payload)
+	if err != nil || cMsgID == "" || cUID != uid || cUser != "SIM-CLIENT" || cRoom != "RETRO" || body != "testing 1-2-3" {
+		t.Fatalf("Chat recv mismatch: msgID=%q, uid=%d, user=%q, room=%q, body=%q, err=%v", cMsgID, cUID, cUser, cRoom, body, err)
 	}
 }
 

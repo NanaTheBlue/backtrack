@@ -26,6 +26,7 @@ export default function App() {
     editMessage,
     deleteMessage,
     createRoom,
+    leaveRoom,
     selectRoom,
   } = useBacktrack();
 
@@ -80,6 +81,7 @@ export default function App() {
           rooms={rooms}
           onSelectRoom={selectRoom}
           onCreateRoom={createRoom}
+          onLeaveRoom={leaveRoom}
           onOpenSettings={() => setIsSettingsOpen(true)}
           peers={peers}
           isOnline={isOnline}
