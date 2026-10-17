@@ -94,6 +94,7 @@ func (h *Hub) handleLeaveRoom(e leaveRoomEvent) {
 
 	if _, inRoom := members[e.user.ID]; inRoom {
 		delete(members, e.user.ID)
+		delete(h.pendingHistory, userRoomKey{userID: e.user.ID, room: room})
 		h.broadcastToRoom(room, protocol.MsgRoomLeft, protocol.RoomLeftPayload(e.user.ID, room), 0)
 		e.user.send(protocol.MsgRoomLeft, protocol.RoomLeftPayload(e.user.ID, room))
 

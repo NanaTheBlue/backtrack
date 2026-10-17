@@ -13,8 +13,26 @@ import (
 
 // messageMeta tracks the sender and channel of a message sent in the current session.
 type messageMeta struct {
+	userID  uint32
+	room    string
+	body    string
+	deleted bool
+}
+
+type userRoomKey struct {
 	userID uint32
 	room   string
+}
+
+type queuedRoomMsg struct {
+	msgType byte
+	payload []byte
+}
+
+type roomHistoryEvent struct {
+	user     *User
+	room     string
+	messages []message.Message
 }
 
 func (h *Hub) sendRoomHistory(u *User, room string) {
@@ -22,14 +40,11 @@ func (h *Hub) sendRoomHistory(u *User, room string) {
 		return
 	}
 
-	// Snapshot active session message owners so we only attach live userIDs to messages
-	// sent during the current session (preventing recycled IDs from claiming old messages).
-	activeOwners := make(map[string]uint32, len(h.messageOwners))
-	for msgID, meta := range h.messageOwners {
-		if meta.room == room {
-			activeOwners[msgID] = meta.userID
-		}
+	key := userRoomKey{userID: u.ID, room: room}
+	if _, alreadyPending := h.pendingHistory[key]; alreadyPending {
+		return
 	}
+	h.pendingHistory[key] = nil
 
 	h.dbWg.Add(1)
 	go func() {
@@ -40,20 +55,66 @@ func (h *Hub) sendRoomHistory(u *User, room string) {
 		recent, err := h.msgRepo.GetRecent(ctx, room, DefaultHistoryLimit)
 		if err != nil {
 			slog.Error("failed to fetch room history", "room", room, "username", u.Username, "error", err)
-			return
+			recent = nil
 		}
-		for _, m := range recent {
-			uid := uint32(0)
-			if ownerID, ok := activeOwners[m.ID]; ok && ownerID == m.UserID {
-				uid = m.UserID
-			}
-			r := m.Room
-			if r == "" {
-				r = room
-			}
-			u.send(protocol.MsgChatRecv, protocol.ChatRecvPayload(m.ID, uid, m.UserName, r, m.Body))
+
+		select {
+		case h.roomHistory <- roomHistoryEvent{user: u, room: room, messages: recent}:
+		case <-h.done:
 		}
 	}()
+}
+
+func (h *Hub) handleRoomHistory(e roomHistoryEvent) {
+	key := userRoomKey{userID: e.user.ID, room: e.room}
+	queued, pending := h.pendingHistory[key]
+	delete(h.pendingHistory, key)
+	if !pending {
+		return
+	}
+
+	members, exists := h.rooms[e.room]
+	if !exists {
+		return
+	}
+	if current, inRoom := members[e.user.ID]; !inRoom || current != e.user {
+		return
+	}
+
+	sentIDs := make(map[string]struct{}, len(e.messages))
+	for _, m := range e.messages {
+		// Only attach live userIDs to messages sent during the current session
+		// (preventing recycled IDs from claiming old messages).
+		uid := uint32(0)
+		body := m.Body
+		if meta, ok := h.messageOwners[m.ID]; ok {
+			if meta.deleted {
+				continue
+			}
+			if meta.room == e.room && meta.userID == m.UserID {
+				uid = m.UserID
+				body = meta.body
+			}
+		}
+		r := m.Room
+		if r == "" {
+			r = e.room
+		}
+		sentIDs[m.ID] = struct{}{}
+		e.user.send(protocol.MsgChatRecv, protocol.ChatRecvPayload(m.ID, uid, m.UserName, r, body))
+	}
+
+	for _, qm := range queued {
+		if qm.msgType == protocol.MsgChatRecv {
+			if mid, _, _, _, _, err := protocol.ParseChatRecv(qm.payload); err == nil {
+				if _, alreadySent := sentIDs[mid]; alreadySent {
+					continue
+				}
+				sentIDs[mid] = struct{}{}
+			}
+		}
+		e.user.send(qm.msgType, qm.payload)
+	}
 }
 
 func (h *Hub) handleChat(e chatEvent) {
@@ -79,7 +140,7 @@ func (h *Hub) handleChat(e chatEvent) {
 	msgID := uuid.NewString()
 
 	// Track in-memory message ownership for the active connection session
-	h.messageOwners[msgID] = messageMeta{userID: e.from.ID, room: room}
+	h.messageOwners[msgID] = messageMeta{userID: e.from.ID, room: room, body: e.body}
 	h.messageOrder = append(h.messageOrder, msgID)
 	if len(h.messageOrder) > MaxTrackedMessages {
 		oldest := h.messageOrder[0]
@@ -132,7 +193,7 @@ func (h *Hub) handleChatEdit(e chatEditEvent) {
 	}
 
 	meta, found := h.messageOwners[e.msgID]
-	if !found {
+	if !found || meta.deleted {
 		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("message not found or not eligible for editing"))
 		return
 	}
@@ -144,6 +205,9 @@ func (h *Hub) handleChatEdit(e chatEditEvent) {
 		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("message does not belong to specified channel"))
 		return
 	}
+
+	meta.body = e.body
+	h.messageOwners[e.msgID] = meta
 
 	// Persist edit asynchronously
 	if h.msgRepo != nil {
@@ -183,7 +247,7 @@ func (h *Hub) handleChatDelete(e chatDeleteEvent) {
 	}
 
 	meta, found := h.messageOwners[e.msgID]
-	if !found {
+	if !found || meta.deleted {
 		e.from.send(protocol.MsgServerError, protocol.ErrorPayload("message not found or not eligible for deletion"))
 		return
 	}
@@ -196,15 +260,9 @@ func (h *Hub) handleChatDelete(e chatDeleteEvent) {
 		return
 	}
 
-	delete(h.messageOwners, e.msgID)
-	for i, id := range h.messageOrder {
-		if id == e.msgID {
-			copy(h.messageOrder[i:], h.messageOrder[i+1:])
-			h.messageOrder[len(h.messageOrder)-1] = ""
-			h.messageOrder = h.messageOrder[:len(h.messageOrder)-1]
-			break
-		}
-	}
+	meta.deleted = true
+	meta.body = ""
+	h.messageOwners[e.msgID] = meta
 
 	// Persist delete asynchronously
 	if h.msgRepo != nil {

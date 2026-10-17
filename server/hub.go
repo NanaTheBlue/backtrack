@@ -85,23 +85,26 @@ type leaveRoomEvent struct {
 
 // Hub routes events between connected users and manages channels/rooms.
 type Hub struct {
-	users         map[uint32]*User            // owned by Run(); never touch it from another goroutine
-	rooms         map[string]map[uint32]*User // owned by Run(); roomName -> set of users
-	messageOwners map[string]messageMeta      // owned by Run(); msgID -> messageMeta
-	messageOrder  []string                    // owned by Run(); FIFO list of msgIDs for bounded memory
-	msgRepo       message.Repository
-	dbWg          sync.WaitGroup
+	users          map[uint32]*User                // owned by Run(); never touch it from another goroutine
+	rooms          map[string]map[uint32]*User     // owned by Run(); roomName -> set of users
+	messageOwners  map[string]messageMeta          // owned by Run(); msgID -> messageMeta
+	messageOrder   []string                        // owned by Run(); FIFO list of msgIDs for bounded memory
+	pendingHistory map[userRoomKey][]queuedRoomMsg // owned by Run(); buffers live room chat while history loads
+	msgRepo        message.Repository
+	dbWg           sync.WaitGroup
 
-	register   chan registerEvent
-	unregister chan *User
-	chat       chan chatEvent
-	chatEdit   chan chatEditEvent
-	chatDelete chan chatDeleteEvent
-	presence   chan presenceEvent
-	joinRoom   chan joinRoomEvent
-	leaveRoom  chan leaveRoomEvent
-	done       chan struct{} // closed by Stop() to shut the hub down
-	stopOnce   sync.Once     // guarantees Stop() only closes done once
+	register    chan registerEvent
+	unregister  chan *User
+	chat        chan chatEvent
+	chatEdit    chan chatEditEvent
+	chatDelete  chan chatDeleteEvent
+	roomHistory chan roomHistoryEvent
+	presence    chan presenceEvent
+	joinRoom    chan joinRoomEvent
+	leaveRoom   chan leaveRoomEvent
+	done        chan struct{} // closed by Stop() to shut the hub down
+	stopped     chan struct{} // closed when Run() exits
+	stopOnce    sync.Once     // guarantees Stop() only closes done once
 }
 
 // NewHub creates a hub. Call Run() in its own goroutine to start it.
@@ -113,20 +116,23 @@ func NewHub(repos ...message.Repository) *Hub {
 	}
 
 	h := &Hub{
-		users:         make(map[uint32]*User),
-		rooms:         make(map[string]map[uint32]*User),
-		messageOwners: make(map[string]messageMeta),
-		messageOrder:  make([]string, 0, MaxTrackedMessages),
-		msgRepo:       repo,
-		register:      make(chan registerEvent),
-		unregister:    make(chan *User),
-		chat:          make(chan chatEvent),
-		chatEdit:      make(chan chatEditEvent),
-		chatDelete:    make(chan chatDeleteEvent),
-		presence:      make(chan presenceEvent),
-		joinRoom:      make(chan joinRoomEvent),
-		leaveRoom:     make(chan leaveRoomEvent),
-		done:          make(chan struct{}),
+		users:          make(map[uint32]*User),
+		rooms:          make(map[string]map[uint32]*User),
+		messageOwners:  make(map[string]messageMeta),
+		messageOrder:   make([]string, 0, MaxTrackedMessages),
+		pendingHistory: make(map[userRoomKey][]queuedRoomMsg),
+		msgRepo:        repo,
+		register:       make(chan registerEvent),
+		unregister:     make(chan *User),
+		chat:           make(chan chatEvent),
+		chatEdit:       make(chan chatEditEvent),
+		chatDelete:     make(chan chatDeleteEvent),
+		roomHistory:    make(chan roomHistoryEvent),
+		presence:       make(chan presenceEvent),
+		joinRoom:       make(chan joinRoomEvent),
+		leaveRoom:      make(chan leaveRoomEvent),
+		done:           make(chan struct{}),
+		stopped:        make(chan struct{}),
 	}
 	h.rooms[protocol.DefaultRoom] = make(map[uint32]*User)
 	return h
@@ -135,6 +141,7 @@ func NewHub(repos ...message.Repository) *Hub {
 // Run is the hub's event loop. It is the ONLY goroutine allowed to read or
 // write h.users or h.rooms.
 func (h *Hub) Run() {
+	defer close(h.stopped)
 	for {
 		select {
 		case req := <-h.register:
@@ -147,6 +154,8 @@ func (h *Hub) Run() {
 			h.handleChatEdit(e)
 		case e := <-h.chatDelete:
 			h.handleChatDelete(e)
+		case e := <-h.roomHistory:
+			h.handleRoomHistory(e)
 		case e := <-h.presence:
 			h.handlePresence(e)
 		case e := <-h.joinRoom:
@@ -169,6 +178,7 @@ func (h *Hub) Stop() {
 	h.stopOnce.Do(func() {
 		close(h.done)
 	})
+	<-h.stopped
 	h.dbWg.Wait()
 }
 
@@ -308,7 +318,12 @@ func (h *Hub) handleUnregister(u *User) {
 	// Invalidate session-owned messages so recycled user IDs cannot edit them
 	for id, meta := range h.messageOwners {
 		if meta.userID == u.ID {
-			delete(h.messageOwners, id)
+			if meta.deleted {
+				meta.userID = 0
+				h.messageOwners[id] = meta
+			} else {
+				delete(h.messageOwners, id)
+			}
 		}
 	}
 	n := 0
@@ -322,6 +337,12 @@ func (h *Hub) handleUnregister(u *User) {
 		h.messageOrder[i] = ""
 	}
 	h.messageOrder = h.messageOrder[:n]
+
+	for key := range h.pendingHistory {
+		if key.userID == u.ID {
+			delete(h.pendingHistory, key)
+		}
+	}
 
 	roomsChanged := false
 	for room, members := range h.rooms {
@@ -365,9 +386,17 @@ func (h *Hub) broadcastToRoom(room string, msgType byte, payload []byte, exclude
 	if !exists {
 		return
 	}
+	isChatEvent := msgType == protocol.MsgChatRecv || msgType == protocol.MsgChatEdited || msgType == protocol.MsgChatDeleted
 	for id, u := range members {
 		if id == excludeID {
 			continue
+		}
+		if isChatEvent {
+			key := userRoomKey{userID: id, room: room}
+			if queued, pending := h.pendingHistory[key]; pending {
+				h.pendingHistory[key] = append(queued, queuedRoomMsg{msgType: msgType, payload: payload})
+				continue
+			}
 		}
 		u.send(msgType, payload)
 	}
