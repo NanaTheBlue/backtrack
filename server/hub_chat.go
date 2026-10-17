@@ -29,12 +29,6 @@ type queuedRoomMsg struct {
 	payload []byte
 }
 
-type roomHistoryEvent struct {
-	user     *User
-	room     string
-	messages []message.Message
-}
-
 func (h *Hub) runDB(fn func(ctx context.Context)) {
 	if h.msgRepo == nil {
 		return
@@ -107,32 +101,28 @@ func (h *Hub) sendRoomHistory(u *User, room string) {
 			slog.Error("failed to fetch room history", "room", room, "username", u.Username, "error", err)
 			recent = nil
 		}
-
-		select {
-		case h.roomHistory <- roomHistoryEvent{user: u, room: room, messages: recent}:
-		case <-h.done:
-		}
+		h.enqueue(func() { h.handleRoomHistory(u, room, recent) })
 	})
 }
 
-func (h *Hub) handleRoomHistory(e roomHistoryEvent) {
-	key := userRoomKey{userID: e.user.ID, room: e.room}
+func (h *Hub) handleRoomHistory(u *User, room string, messages []message.Message) {
+	key := userRoomKey{userID: u.ID, room: room}
 	queued, pending := h.pendingHistory[key]
 	delete(h.pendingHistory, key)
 	if !pending {
 		return
 	}
 
-	members, exists := h.rooms[e.room]
+	members, exists := h.rooms[room]
 	if !exists {
 		return
 	}
-	if current, inRoom := members[e.user.ID]; !inRoom || current != e.user {
+	if current, inRoom := members[u.ID]; !inRoom || current != u {
 		return
 	}
 
-	sentIDs := make(map[string]struct{}, len(e.messages))
-	for _, m := range e.messages {
+	sentIDs := make(map[string]struct{}, len(messages))
+	for _, m := range messages {
 		// Only attach live userIDs to messages sent during the current session
 		// (preventing recycled IDs from claiming old messages).
 		uid := uint32(0)
@@ -141,17 +131,17 @@ func (h *Hub) handleRoomHistory(e roomHistoryEvent) {
 			if meta.deleted {
 				continue
 			}
-			if meta.room == e.room && meta.userID == m.UserID {
+			if meta.room == room && meta.userID == m.UserID {
 				uid = m.UserID
 				body = meta.body
 			}
 		}
 		r := m.Room
 		if r == "" {
-			r = e.room
+			r = room
 		}
 		sentIDs[m.ID] = struct{}{}
-		e.user.send(protocol.MsgChatRecv, protocol.ChatRecvPayload(m.ID, uid, m.UserName, r, body))
+		u.send(protocol.MsgChatRecv, protocol.ChatRecvPayload(m.ID, uid, m.UserName, r, body))
 	}
 
 	for _, qm := range queued {
@@ -163,12 +153,12 @@ func (h *Hub) handleRoomHistory(e roomHistoryEvent) {
 				sentIDs[mid] = struct{}{}
 			}
 		}
-		e.user.send(qm.msgType, qm.payload)
+		u.send(qm.msgType, qm.payload)
 	}
 }
 
-func (h *Hub) handleChat(e chatEvent) {
-	room, ok := h.requireRoomMember(e.from, e.room, "send")
+func (h *Hub) handleChat(from *User, rawRoom string, body string) {
+	room, ok := h.requireRoomMember(from, rawRoom, "send")
 	if !ok {
 		return
 	}
@@ -176,7 +166,7 @@ func (h *Hub) handleChat(e chatEvent) {
 	msgID := uuid.NewString()
 
 	// Track in-memory message ownership for the active connection session
-	h.messageOwners[msgID] = messageMeta{userID: e.from.ID, room: room, body: e.body}
+	h.messageOwners[msgID] = messageMeta{userID: from.ID, room: room, body: body}
 	h.messageOrder = append(h.messageOrder, msgID)
 	if len(h.messageOrder) > MaxTrackedMessages {
 		oldest := h.messageOrder[0]
@@ -189,9 +179,9 @@ func (h *Hub) handleChat(e chatEvent) {
 	msg := &message.Message{
 		ID:       msgID,
 		Room:     room,
-		UserID:   e.from.ID,
-		UserName: e.from.Username,
-		Body:     e.body,
+		UserID:   from.ID,
+		UserName: from.Username,
+		Body:     body,
 	}
 	h.runDB(func(ctx context.Context) {
 		if err := h.msgRepo.Save(ctx, msg); err != nil {
@@ -199,49 +189,49 @@ func (h *Hub) handleChat(e chatEvent) {
 		}
 	})
 
-	chatMSG := protocol.ChatRecvPayload(msgID, e.from.ID, e.from.Username, room, e.body)
+	chatMSG := protocol.ChatRecvPayload(msgID, from.ID, from.Username, room, body)
 	h.broadcastToRoom(room, protocol.MsgChatRecv, chatMSG, 0)
 }
 
-func (h *Hub) handleChatEdit(e chatEditEvent) {
-	room, meta, ok := h.requireMessageOwner(e.from, e.msgID, e.room, "edit")
+func (h *Hub) handleChatEdit(from *User, msgID string, rawRoom string, body string) {
+	room, meta, ok := h.requireMessageOwner(from, msgID, rawRoom, "edit")
 	if !ok {
 		return
 	}
 
-	meta.body = e.body
-	h.messageOwners[e.msgID] = meta
+	meta.body = body
+	h.messageOwners[msgID] = meta
 
 	// Persist edit asynchronously
-	msgID, body, uid := e.msgID, e.body, e.from.ID
+	uid := from.ID
 	h.runDB(func(ctx context.Context) {
 		if err := h.msgRepo.Edit(ctx, &message.Message{ID: msgID, Room: room, Body: body}, uid); err != nil {
 			slog.Error("failed to persist message edit", "msg_id", msgID, "error", err)
 		}
 	})
 
-	payload := protocol.ChatEditedPayload(e.msgID, e.from.ID, room, e.body)
+	payload := protocol.ChatEditedPayload(msgID, from.ID, room, body)
 	h.broadcastToRoom(room, protocol.MsgChatEdited, payload, 0)
 }
 
-func (h *Hub) handleChatDelete(e chatDeleteEvent) {
-	room, meta, ok := h.requireMessageOwner(e.from, e.msgID, e.room, "delete")
+func (h *Hub) handleChatDelete(from *User, msgID string, rawRoom string) {
+	room, meta, ok := h.requireMessageOwner(from, msgID, rawRoom, "delete")
 	if !ok {
 		return
 	}
 
 	meta.deleted = true
 	meta.body = ""
-	h.messageOwners[e.msgID] = meta
+	h.messageOwners[msgID] = meta
 
 	// Persist delete asynchronously
-	msgID, uid := e.msgID, e.from.ID
+	uid := from.ID
 	h.runDB(func(ctx context.Context) {
 		if err := h.msgRepo.Delete(ctx, msgID, uid); err != nil {
 			slog.Error("failed to persist message delete", "msg_id", msgID, "error", err)
 		}
 	})
 
-	payload := protocol.ChatDeletedPayload(e.msgID, e.from.ID, room)
+	payload := protocol.ChatDeletedPayload(msgID, from.ID, room)
 	h.broadcastToRoom(room, protocol.MsgChatDeleted, payload, 0)
 }

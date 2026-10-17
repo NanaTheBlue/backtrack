@@ -37,52 +37,6 @@ const (
 	dbOperationTimeout = 5 * time.Second
 )
 
-// registerEvent asks the hub to register a new user and confirms uniqueness.
-type registerEvent struct {
-	user *User
-	err  chan error
-}
-
-// chatEvent asks the hub to broadcast a chat message from a user to a room.
-type chatEvent struct {
-	from *User
-	room string
-	body string
-}
-
-// chatEditEvent asks the hub to edit an existing chat message.
-type chatEditEvent struct {
-	from  *User
-	msgID string
-	room  string
-	body  string
-}
-
-// chatDeleteEvent asks the hub to delete an existing chat message.
-type chatDeleteEvent struct {
-	from  *User
-	msgID string
-	room  string
-}
-
-// presenceEvent asks the hub to change a user's status and announce it.
-type presenceEvent struct {
-	user   *User
-	status byte
-}
-
-// joinRoomEvent asks the hub to add a user to a room.
-type joinRoomEvent struct {
-	user *User
-	room string
-}
-
-// leaveRoomEvent asks the hub to remove a user from a room.
-type leaveRoomEvent struct {
-	user *User
-	room string
-}
-
 // Hub routes events between connected users and manages channels/rooms.
 type Hub struct {
 	users          map[uint32]*User                // owned by Run(); never touch it from another goroutine
@@ -93,18 +47,10 @@ type Hub struct {
 	msgRepo        message.Repository
 	dbWg           sync.WaitGroup
 
-	register    chan registerEvent
-	unregister  chan *User
-	chat        chan chatEvent
-	chatEdit    chan chatEditEvent
-	chatDelete  chan chatDeleteEvent
-	roomHistory chan roomHistoryEvent
-	presence    chan presenceEvent
-	joinRoom    chan joinRoomEvent
-	leaveRoom   chan leaveRoomEvent
-	done        chan struct{} // closed by Stop() to shut the hub down
-	stopped     chan struct{} // closed when Run() exits
-	stopOnce    sync.Once     // guarantees Stop() only closes done once
+	events   chan func()
+	done     chan struct{} // closed by Stop() to shut the hub down
+	stopped  chan struct{} // closed when Run() exits
+	stopOnce sync.Once     // guarantees Stop() only closes done once
 }
 
 // NewHub creates a hub. Call Run() in its own goroutine to start it.
@@ -122,15 +68,7 @@ func NewHub(repos ...message.Repository) *Hub {
 		messageOrder:   make([]string, 0, MaxTrackedMessages),
 		pendingHistory: make(map[userRoomKey][]queuedRoomMsg),
 		msgRepo:        repo,
-		register:       make(chan registerEvent),
-		unregister:     make(chan *User),
-		chat:           make(chan chatEvent),
-		chatEdit:       make(chan chatEditEvent),
-		chatDelete:     make(chan chatDeleteEvent),
-		roomHistory:    make(chan roomHistoryEvent),
-		presence:       make(chan presenceEvent),
-		joinRoom:       make(chan joinRoomEvent),
-		leaveRoom:      make(chan leaveRoomEvent),
+		events:         make(chan func()),
 		done:           make(chan struct{}),
 		stopped:        make(chan struct{}),
 	}
@@ -144,24 +82,8 @@ func (h *Hub) Run() {
 	defer close(h.stopped)
 	for {
 		select {
-		case req := <-h.register:
-			h.handleRegister(req)
-		case u := <-h.unregister:
-			h.handleUnregister(u)
-		case e := <-h.chat:
-			h.handleChat(e)
-		case e := <-h.chatEdit:
-			h.handleChatEdit(e)
-		case e := <-h.chatDelete:
-			h.handleChatDelete(e)
-		case e := <-h.roomHistory:
-			h.handleRoomHistory(e)
-		case e := <-h.presence:
-			h.handlePresence(e)
-		case e := <-h.joinRoom:
-			h.handleJoinRoom(e)
-		case e := <-h.leaveRoom:
-			h.handleLeaveRoom(e)
+		case fn := <-h.events:
+			fn()
 		case <-h.done:
 			// Close all connected users' outboxes to signal them to disconnect.
 			for _, u := range h.users {
@@ -182,98 +104,68 @@ func (h *Hub) Stop() {
 	h.dbWg.Wait()
 }
 
+func (h *Hub) enqueue(fn func()) bool {
+	select {
+	case h.events <- fn:
+		return true
+	case <-h.done:
+		return false
+	}
+}
+
 // --- Event senders (called from connection goroutines) ---
 
 // Register adds a user to the chat if callsign is not already in use.
 func (h *Hub) Register(u *User) error {
 	errChan := make(chan error, 1)
-	select {
-	case h.register <- registerEvent{user: u, err: errChan}:
-		return <-errChan
-	case <-h.done:
+	if !h.enqueue(func() { h.handleRegister(u, errChan) }) {
 		return errors.New("server shutting down")
 	}
+	return <-errChan
 }
 
 // Unregister removes a user from the chat.
 func (h *Hub) Unregister(u *User) {
-	select {
-	case h.unregister <- u:
-		return
-	case <-h.done:
-		return
-	}
+	h.enqueue(func() { h.handleUnregister(u) })
 }
 
 // Chat broadcasts a chat message from a user to a specific room.
 func (h *Hub) Chat(from *User, room string, body string) {
-	select {
-	case h.chat <- chatEvent{from: from, room: room, body: body}:
-		return
-	case <-h.done:
-		return
-	}
+	h.enqueue(func() { h.handleChat(from, room, body) })
 }
 
 // EditChat requests to edit an existing message.
 func (h *Hub) EditChat(from *User, msgID string, room string, body string) {
-	select {
-	case h.chatEdit <- chatEditEvent{from: from, msgID: msgID, room: room, body: body}:
-		return
-	case <-h.done:
-		return
-	}
+	h.enqueue(func() { h.handleChatEdit(from, msgID, room, body) })
 }
 
 // DeleteChat requests to delete an existing message.
 func (h *Hub) DeleteChat(from *User, msgID string, room string) {
-	select {
-	case h.chatDelete <- chatDeleteEvent{from: from, msgID: msgID, room: room}:
-		return
-	case <-h.done:
-		return
-	}
+	h.enqueue(func() { h.handleChatDelete(from, msgID, room) })
 }
 
 // SetPresence changes a user's status and announces it.
 func (h *Hub) SetPresence(u *User, status byte) {
-	select {
-	case h.presence <- presenceEvent{user: u, status: status}:
-		return
-	case <-h.done:
-		return
-	}
+	h.enqueue(func() { h.handlePresence(u, status) })
 }
 
 // JoinRoom requests to join a channel.
 func (h *Hub) JoinRoom(u *User, room string) {
-	select {
-	case h.joinRoom <- joinRoomEvent{user: u, room: room}:
-		return
-	case <-h.done:
-		return
-	}
+	h.enqueue(func() { h.handleJoinRoom(u, room) })
 }
 
 // LeaveRoom requests to leave a channel.
 func (h *Hub) LeaveRoom(u *User, room string) {
-	select {
-	case h.leaveRoom <- leaveRoomEvent{user: u, room: room}:
-		return
-	case <-h.done:
-		return
-	}
+	h.enqueue(func() { h.handleLeaveRoom(u, room) })
 }
 
 // --- Event handlers (only ever called from Run) ---
 
-func (h *Hub) handleRegister(req registerEvent) {
-	u := req.user
-
+func (h *Hub) handleRegister(u *User, errChan chan<- error) {
 	// Verify callsign is not already in use by another online peer (case-insensitive)
 	for _, existing := range h.users {
 		if strings.EqualFold(existing.Username, u.Username) {
-			req.err <- fmt.Errorf("callsign %q is already online", u.Username)
+			errChan <- fmt.Errorf("callsign %q is already online", u.Username)
 			return
 		}
 	}
@@ -283,7 +175,7 @@ func (h *Hub) handleRegister(req registerEvent) {
 
 	// Auto-join default room (already initialized in NewHub)
 	h.rooms[protocol.DefaultRoom][u.ID] = u
-	req.err <- nil
+	errChan <- nil
 
 	// Send u Welcome with their user ID
 	u.send(protocol.MsgWelcome, protocol.WelcomePayload(u.ID))
@@ -364,9 +256,9 @@ func (h *Hub) handleUnregister(u *User) {
 	u.close()
 }
 
-func (h *Hub) handlePresence(e presenceEvent) {
-	e.user.Status = e.status
-	updateMSG := protocol.PresencePayload(e.user.ID, e.user.Status)
+func (h *Hub) handlePresence(u *User, status byte) {
+	u.Status = status
+	updateMSG := protocol.PresencePayload(u.ID, u.Status)
 	h.broadcast(protocol.MsgPresenceUpdate, updateMSG, 0)
 }
 
