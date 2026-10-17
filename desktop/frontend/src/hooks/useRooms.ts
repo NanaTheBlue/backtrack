@@ -14,10 +14,8 @@ export function useRooms({ isOnline, onLog }: UseRoomsOptions) {
   useEffect(() => {
     const unsubRoomList = EventsOn('room_list', (serverRooms: string[]) => {
       if (Array.isArray(serverRooms)) {
-        setRooms((prev) => {
-          const combined = ['GLOBAL', ...serverRooms.filter((r) => r !== 'GLOBAL')];
-          return Array.from(new Set([...combined, ...prev]));
-        });
+        const nextRooms = Array.from(new Set(['GLOBAL', ...serverRooms.filter((r) => r !== 'GLOBAL')]));
+        setRooms(nextRooms);
       }
     });
 
